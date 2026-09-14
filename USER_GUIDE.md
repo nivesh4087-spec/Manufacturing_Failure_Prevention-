@@ -352,6 +352,8 @@ python -m pytest tests/ --cov=src     # with coverage
 | `test_inference.py` | Batch scoring path |
 | `test_tool_wear_profile.py` | Tool-wear interval derivation |
 | `test_failure_cases.py` | Malformed input handling |
+| `test_train_modes.py` | Training profile presets |
+| `test_pages_smoke.py` | Every dashboard page renders without error |
 
 ---
 

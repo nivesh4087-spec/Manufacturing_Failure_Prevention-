@@ -225,7 +225,7 @@ inspection workflow, and clear initial technical debt.
     Then the full suite completes in under 45 seconds.
   ```
 - **Labels**: `technical debt`, `devops` · **Estimate**: 2 points
-- **Result**: the suite now runs **132 tests in about 5 seconds**.
+- **Result**: the unit suite runs **132 tests in about 5 seconds**; the full suite including headless page rendering runs **161 tests in about 30 seconds**.
 
 ---
 
@@ -406,7 +406,7 @@ shown to users were not computed from anything. Sprint 2 addressed that.
 - **No literal figures in user-facing output.** Metrics come from a collection
   module that raises rather than substituting a value.
 - **Dependency changes require a requirements entry in the same commit.**
-- Test count grew from 75 to **132**.
+- Test count grew from 75 to **161**.
 
 ### Velocity note
 Sprint 2's lower commitment (34 against 42) was deliberate. Hardening work is

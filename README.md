@@ -7,7 +7,7 @@
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://python.org)
 [![Streamlit](https://img.shields.io/badge/Streamlit-dashboard-FF4B4B.svg)](https://streamlit.io)
 [![SHAP](https://img.shields.io/badge/SHAP-explainability-8b5cf6.svg)](https://shap.readthedocs.io)
-[![Tests](https://img.shields.io/badge/tests-132%20passing-0ca30c.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-161%20passing-0ca30c.svg)](tests/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 *Predicts machine failures before they happen, explains every prediction, and
@@ -271,7 +271,7 @@ Manufacturing_Failure_Prevention-/
 │   └── reporting/               report metric collection
 ├── scripts/                     training, report and figure generation
 ├── config/config.yaml           central configuration
-├── tests/                       132 tests
+├── tests/                       161 tests
 └── reports/                     generated figures and results
 ```
 
@@ -296,7 +296,9 @@ python -m pytest tests/ -q
 
 Covering data loading, preprocessing, feature formulas, risk scoring, the
 recommendation rules, the batch inference path, the tool-wear interval
-derivation, training mode presets, and malformed-input handling.
+derivation, training mode presets, and malformed-input handling — plus headless
+smoke tests that render every dashboard page and fail the build if any one of
+them cannot open.
 
 ---
 
