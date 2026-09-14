@@ -65,6 +65,9 @@ reports/results/*.csv
 # Logs
 *.log
 
+# Local working notes & agent instructions (not part of the deliverable)
+md/
+
 # Assignment / submission documents (do not commit Word/PDF docs)
 *.docx
 *.pdf
@@ -72,6 +75,11 @@ ps_doc.docx
 
 # Compiled binaries / build outputs
 bin/
+*.class
+
+# Unrelated Java coursework kept out of the ML repo
+ServletDemo/
+git-final-project/
 
 # Test coverage & type checking caches
 .coverage
