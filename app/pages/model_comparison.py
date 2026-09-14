@@ -1,597 +1,758 @@
 """
-Model Comparison
-=================
-Comprehensive model evaluation and comparison dashboard.
+Model & Cost Analysis
+=====================
+Which model to deploy, and what that choice is worth in currency.
 
-Shows:
-- Performance comparison table
-- Interactive ROC curves
-- Interactive Precision-Recall curves
-- Interactive Confusion matrices
-- Interactive Calibration curves
-- Feature engineering ablation study
+Curves are recomputed from the held-out test split rather than read from a saved
+image, so they stay honest after a retrain. The split itself is cached — it used
+to be rebuilt from scratch on every widget interaction, which made the cost
+sliders feel broken.
 """
 
-import streamlit as st
-import pandas as pd
-import numpy as np
+from __future__ import annotations
+
 from pathlib import Path
+from typing import Any, Dict, List
+
+import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
-from sklearn.metrics import roc_curve, auc, precision_recall_curve, average_precision_score, confusion_matrix
+import streamlit as st
 from sklearn.calibration import calibration_curve
+from sklearn.metrics import (
+    auc,
+    average_precision_score,
+    confusion_matrix,
+    precision_recall_curve,
+    roc_curve,
+)
 
-from app.components.styles import render_header_banner, render_kpi_card
+from app.components.data_access import active_dataset, get_test_split
+from app.components.styles import (
+    SEQUENTIAL,
+    SERIES,
+    TOKENS,
+    plotly_layout,
+    render_footer,
+    render_masthead,
+    render_notice,
+    render_stat_tile,
+)
 
 
-def render_page(project_root, load_artifacts_fn, load_results_fn, load_dataset_fn):
-    """Render the Model Comparison page."""
-
-    st.markdown(render_header_banner(
-        "Model Comparison & Evaluation",
-        "Comprehensive performance analysis across all trained models using interactive visualizers"
-    ), unsafe_allow_html=True)
-
-    # Load artifacts
+def render_page(project_root: Path, load_artifacts_fn, load_results_fn, load_dataset_fn) -> None:
+    """Render the Model & Cost Analysis page."""
     try:
         artifacts, config = load_artifacts_fn()
-        test_results = artifacts.get("test_results", [])
-        best_name = artifacts.get("best_model_name", "N/A")
-        all_models = artifacts.get("all_models", {})
-        calibrated_model = artifacts.get("best_model_calibrated")
-    except Exception as e:
-        st.error(f"Model artifacts not loaded: {e}")
+    except Exception as exc:
+        st.markdown(render_notice("Models unavailable", str(exc), "critical"), unsafe_allow_html=True)
         return
 
-    # Load and preprocess test set for dynamic curves
+    test_results: List[Dict[str, Any]] = artifacts.get("test_results", [])
+    best_name = artifacts.get("best_model_name", "model")
+    all_models = artifacts.get("all_models", {})
+    calibrated_model = artifacts.get("best_model_calibrated")
+
+    st.markdown(
+        render_masthead(
+            "Model & Cost Analysis",
+            "How the candidate models compare on the held-out test split, and what "
+            "each one is worth once failures and false alarms are priced.",
+            f"{len(all_models)} candidates<br>selected on "
+            f"{config['selection']['primary_metric'].upper()}",
+        ),
+        unsafe_allow_html=True,
+    )
+
+    df, _ = active_dataset(load_dataset_fn)
     try:
-        df = load_dataset_fn()
-        from src.preprocessing.pipeline import run_preprocessing_pipeline
-        processed = run_preprocessing_pipeline(df, config)
-        X_test = processed["X_test"]
-        y_test = processed["y_test"]
-    except Exception as e:
-        st.error(f"Failed to prepare evaluation dataset: {e}")
+        X_test, y_test = get_test_split(df, config, cache_key=str(len(df)))
+    except Exception as exc:
+        st.markdown(
+            render_notice("Evaluation split unavailable", f"{type(exc).__name__}: {exc}", "critical"),
+            unsafe_allow_html=True,
+        )
         return
 
-    # Sidebar inputs for cost parameters (shares keys with Executive Overview for state persistence!)
-    biz_config = config.get("business", {})
-    default_downtime_cost = biz_config.get("downtime_cost_per_hour", 10000.0)
-    default_downtime_hours = biz_config.get("avg_downtime_hours", 4.0)
-    default_preventive_cost = biz_config.get("preventive_action_cost", 1500.0)
-    default_false_alarm_cost = biz_config.get("false_alarm_cost", 1500.0)
-    default_license_cost = biz_config.get("license_cost_monthly", 2500.0)
-
-    with st.sidebar:
-        st.markdown("<hr style='border-color: #2a3a4e;'>", unsafe_allow_html=True)
-        st.markdown('<div style="font-size: 0.85rem; font-weight: bold; color: #94a3b8; margin-bottom: 8px;">💼 Cost-Benefit Evaluator</div>', unsafe_allow_html=True)
-        
-        sim_downtime_cost = st.number_input(
-            "Hourly Downtime Cost ($/hr)",
-            min_value=0.0, value=default_downtime_cost, step=500.0,
-            key="sim_downtime_cost",
-            help="Cost incurred per hour of unscheduled machinery breakdown."
-        )
-        sim_downtime_hours = st.number_input(
-            "Average Recovery Time (Hrs)",
-            min_value=0.1, value=default_downtime_hours, step=0.5,
-            key="sim_downtime_hours",
-            help="Average time to repair/replace tool and resume production."
-        )
-        sim_preventive_cost = st.number_input(
-            "Preventive Action Cost ($)",
-            min_value=0.0, value=default_preventive_cost, step=100.0,
-            key="sim_preventive_cost",
-            help="Cost of planned tool replacement / inspection."
-        )
-        sim_false_alarm_cost = st.number_input(
-            "False Alarm Cost ($)",
-            min_value=0.0, value=default_false_alarm_cost, step=100.0,
-            key="sim_false_alarm_cost",
-            help="Cost incurred when model falsely predicts a failure."
-        )
-        sim_license_cost = st.number_input(
-            "Monthly AI Operating Cost ($)",
-            min_value=0.0, value=default_license_cost, step=500.0,
-            key="sim_license_cost",
-            help="Monthly subscription or infrastructure cost for the ML model."
-        )
-
-    tabs = st.tabs([
-        "📊 Comparison Table",
-        "📈 ROC & PR Curves",
-        "🔲 Confusion Matrices",
-        "📐 Calibration",
-        "🔧 Feature Engineering Impact",
-        "💼 Business Cost Evaluation"
-    ])
-
-    # ========================================================================
-    # TAB 1 — Comparison Table
-    # ========================================================================
+    tabs = st.tabs(
+        ["Leaderboard", "ROC & PR", "Confusion", "Calibration", "Feature impact", "Cost"]
+    )
 
     with tabs[0]:
-        st.markdown("### Model Performance Comparison — Test Set")
-
-        if test_results:
-            # KPI cards for best model
-            best = next((r for r in test_results if r["model"] == best_name), test_results[0])
-
-            c1, c2, c3, c4, c5 = st.columns(5)
-            with c1:
-                st.markdown(render_kpi_card("Best Model", best_name, "Selected by F1-Score", "blue"),
-                            unsafe_allow_html=True)
-            with c2:
-                st.markdown(render_kpi_card("Precision", f"{best['precision']:.4f}",
-                            "True positives / predicted positives", "cyan"),
-                            unsafe_allow_html=True)
-            with c3:
-                st.markdown(render_kpi_card("Recall", f"{best['recall']:.4f}",
-                            "Detected failures / actual failures", "green"),
-                            unsafe_allow_html=True)
-            with c4:
-                st.markdown(render_kpi_card("F1-Score", f"{best['f1']:.4f}",
-                            "Harmonic mean of Precision & Recall", "purple"),
-                            unsafe_allow_html=True)
-            with c5:
-                st.markdown(render_kpi_card("PR-AUC", f"{best['pr_auc']:.4f}",
-                            "Area under PR curve", "red"),
-                            unsafe_allow_html=True)
-
-            st.markdown("<br>", unsafe_allow_html=True)
-
-            # Full comparison table
-            results_df = pd.DataFrame([
-                {
-                    "Model": r["model"],
-                    "Precision": r["precision"],
-                    "Recall": r["recall"],
-                    "F1-Score": r["f1"],
-                    "PR-AUC": r["pr_auc"],
-                    "ROC-AUC": r["roc_auc"],
-                    "Brier Score": r["brier_score"],
-                    "Best?": "🏆" if r["model"] == best_name else "",
-                }
-                for r in test_results
-            ])
-
-            st.dataframe(
-                results_df.style.highlight_max(
-                    subset=["Precision", "Recall", "F1-Score", "PR-AUC", "ROC-AUC"],
-                    color="#1a3a2a",
-                ).highlight_min(
-                    subset=["Brier Score"],
-                    color="#1a3a2a",
-                ).format({
-                    "Precision": "{:.4f}", "Recall": "{:.4f}", "F1-Score": "{:.4f}",
-                    "PR-AUC": "{:.4f}", "ROC-AUC": "{:.4f}", "Brier Score": "{:.4f}",
-                }),
-                use_container_width=True,
-                hide_index=True,
-            )
-
-            # Bar chart comparison
-            metrics = ["precision", "recall", "f1", "pr_auc", "roc_auc"]
-            labels = ["Precision", "Recall", "F1-Score", "PR-AUC", "ROC-AUC"]
-            colors = ["#3b82f6", "#ef4444", "#22c55e", "#f97316", "#8b5cf6"]
-
-            fig = go.Figure()
-            for i, r in enumerate(test_results):
-                vals = [r[m] for m in metrics]
-                fig.add_trace(go.Bar(
-                    name=r["model"],
-                    x=labels,
-                    y=vals,
-                    marker_color=colors[i % len(colors)],
-                    text=[f"{v:.3f}" for v in vals],
-                    textposition="outside",
-                    textfont=dict(size=10),
-                ))
-
-            fig.update_layout(
-                barmode="group",
-                title="Model Performance Comparison",
-                title_font=dict(size=16, color="#e2e8f0"),
-                height=400,
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#94a3b8"),
-                yaxis=dict(range=[0, 1.15]),
-                legend=dict(
-                    orientation="h",
-                    yanchor="bottom", y=1.02,
-                    xanchor="right", x=1,
-                ),
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-            st.info(
-                f"**Model Selection Criterion:** Primary metric = **F1-Score** "
-                f"(balances precision & recall for minority class). "
-                f"Secondary = **PR-AUC** (robust to class imbalance). "
-                f"Accuracy is NOT used because the ~96.6% majority class makes it misleading."
-            )
-
-    # ========================================================================
-    # TAB 2 — ROC & PR Curves (Dynamic Plotly)
-    # ========================================================================
-
+        _render_leaderboard(test_results, best_name, config)
     with tabs[1]:
-        c1, c2 = st.columns(2)
-        
-        with c1:
-            st.markdown("### ROC Curves")
-            
-            fig_roc = go.Figure()
-            for name, model_obj in all_models.items():
-                try:
-                    y_prob = model_obj.predict_proba(X_test)[:, 1]
-                    fpr, tpr, _ = roc_curve(y_test, y_prob)
-                    roc_auc = auc(fpr, tpr)
-                    fig_roc.add_trace(go.Scatter(
-                        x=fpr, y=tpr,
-                        mode="lines",
-                        name=f"{name} (AUC = {roc_auc:.4f})",
-                        line=dict(width=2),
-                    ))
-                except Exception:
-                    continue
-
-            # Random classifier line
-            fig_roc.add_trace(go.Scatter(
-                x=[0, 1], y=[0, 1],
-                mode="lines",
-                line=dict(dash="dash", color="rgba(255,255,255,0.2)", width=1),
-                name="Random Classifier",
-                showlegend=False,
-            ))
-
-            fig_roc.update_layout(
-                height=450,
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#94a3b8"),
-                xaxis_title="False Positive Rate",
-                yaxis_title="True Positive Rate",
-                margin=dict(t=20, b=40, l=40, r=20),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                xaxis=dict(gridcolor="#2a3a4e", zerolinecolor="#2a3a4e"),
-                yaxis=dict(gridcolor="#2a3a4e", zerolinecolor="#2a3a4e"),
-            )
-            st.plotly_chart(fig_roc, use_container_width=True)
-
-        with c2:
-            st.markdown("### Precision-Recall Curves")
-            
-            fig_pr = go.Figure()
-            baseline = y_test.mean()
-
-            for name, model_obj in all_models.items():
-                try:
-                    y_prob = model_obj.predict_proba(X_test)[:, 1]
-                    precision, recall, _ = precision_recall_curve(y_test, y_prob)
-                    ap = average_precision_score(y_test, y_prob)
-                    fig_pr.add_trace(go.Scatter(
-                        x=recall, y=precision,
-                        mode="lines",
-                        name=f"{name} (AP = {ap:.4f})",
-                        line=dict(width=2),
-                    ))
-                except Exception:
-                    continue
-
-            # Baseline line
-            fig_pr.add_trace(go.Scatter(
-                x=[0, 1], y=[baseline, baseline],
-                mode="lines",
-                line=dict(dash="dash", color="rgba(255,255,255,0.2)", width=1),
-                name=f"Baseline ({baseline:.3f})",
-                showlegend=False,
-            ))
-
-            fig_pr.update_layout(
-                height=450,
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#94a3b8"),
-                xaxis_title="Recall",
-                yaxis_title="Precision",
-                margin=dict(t=20, b=40, l=40, r=20),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                xaxis=dict(gridcolor="#2a3a4e", zerolinecolor="#2a3a4e"),
-                yaxis=dict(gridcolor="#2a3a4e", zerolinecolor="#2a3a4e"),
-            )
-            st.plotly_chart(fig_pr, use_container_width=True)
-
-        st.markdown("""
-        <div class="disclaimer">
-            <strong>Key Concept: ROC vs. Precision-Recall Curves</strong>
-            <ul style="margin: 4px 0;">
-                <li>For highly imbalanced datasets, ROC curves can look artificially optimistic.</li>
-                <li>Precision-Recall curves offer a more rigorous evaluation since they directly target the minority class (equipment failures).</li>
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
-
-    # ========================================================================
-    # TAB 3 — Confusion Matrices (Interactive Plotly Heatmaps)
-    # ========================================================================
-
+        _render_curves(all_models, X_test, y_test)
     with tabs[2]:
-        st.markdown("### Interactive Confusion Matrices")
-        
-        selected_model_name = st.selectbox(
-            "Select Model to View Confusion Matrix:",
-            [r["model"] for r in test_results]
-        )
-        
-        model_res = next((r for r in test_results if r["model"] == selected_model_name), test_results[0])
-        cm = model_res["confusion_matrix"]
-        
-        # Plot Heatmap
-        labels = ["No Failure", "Failure"]
-        fig_cm = go.Figure(data=go.Heatmap(
-            z=cm,
-            x=labels,
-            y=labels,
-            colorscale="Blues",
-            text=[[f"<b>{val}</b>" for val in row] for row in cm],
-            texttemplate="%{text}",
-            textfont={"size": 16},
-            showscale=False,
-        ))
-        
-        fig_cm.update_layout(
-            height=360,
-            width=360,
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#94a3b8"),
-            xaxis=dict(title="Predicted label", side="bottom"),
-            yaxis=dict(title="True label", autorange="reversed"),
-            margin=dict(t=40, b=40, l=40, r=40),
-        )
-        
-        cm_col_left, cm_col_right = st.columns([1, 2])
-        with cm_col_left:
-            st.plotly_chart(fig_cm, use_container_width=False)
-        with cm_col_right:
-            st.markdown(f"#### Classification Metrics — {selected_model_name}")
-            cr = model_res.get("classification_report", {})
-            if cr:
-                cr_df = pd.DataFrame(cr).T
-                st.dataframe(cr_df.style.format("{:.4f}"), use_container_width=True)
-
-    # ========================================================================
-    # TAB 4 — Calibration (Interactive Curve)
-    # ========================================================================
-
+        _render_confusion(test_results, best_name)
     with tabs[3]:
-        st.markdown("### Probability Calibration Analysis")
+        _render_calibration(all_models, calibrated_model, best_name, X_test, y_test, load_results_fn)
+    with tabs[4]:
+        _render_ablation(load_results_fn)
+    with tabs[5]:
+        _render_cost(all_models, calibrated_model, best_name, X_test, y_test, config)
 
-        cal_results = load_results_fn("calibration_results.json")
-        if cal_results:
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.metric("Brier (Uncalibrated)",
-                          f"{cal_results['brier_uncalibrated']:.4f}")
-            with c2:
-                st.metric("Brier (Calibrated)",
-                          f"{cal_results['brier_calibrated']:.4f}")
-            with c3:
-                improvement = cal_results["improvement"]
-                st.metric("Improvement", f"{improvement:.4f}",
-                          delta=f"{improvement:.4f}")
+    st.markdown(
+        render_footer(
+            f"Evaluated on {len(y_test):,} held-out assets",
+            f"Deployed model: {best_name}",
+        ),
+        unsafe_allow_html=True,
+    )
 
-            st.markdown(f"""
-            **Calibration Method:** {cal_results.get('method', 'isotonic').title()} Calibration
-            
-            **What this means:** A lower Brier Score indicates better calibrated probabilities. 
-            When the model says "80% failure probability," a well-calibrated model means approximately 80% of such predictions are actual failures.
-            """)
 
-        # Plotly Calibration Curves
-        fig_cal = go.Figure()
-        
-        # Base models + calibrated model
-        models_to_plot = dict(all_models)
-        if calibrated_model:
-            models_to_plot[f"{best_name} (Calibrated)"] = calibrated_model
+# ============================================================================
+# Leaderboard
+# ============================================================================
 
-        for name, model_obj in models_to_plot.items():
+def _render_leaderboard(test_results, best_name: str, config: Dict[str, Any]) -> None:
+    """Render headline metrics and the full comparison table."""
+    if not test_results:
+        st.markdown(
+            render_notice("No results", "Re-run the training pipeline.", "warning"),
+            unsafe_allow_html=True,
+        )
+        return
+
+    best = next((r for r in test_results if r["model"] == best_name), test_results[0])
+
+    cols = st.columns(5)
+    tiles = [
+        ("Selected model", best_name, f"Chosen on {config['selection']['primary_metric'].upper()}", "accent"),
+        ("Precision", f"{best['precision']:.3f}", "Of the flagged, how many really fail", "neutral"),
+        ("Recall", f"{best['recall']:.3f}", "Of the failures, how many were caught", "neutral"),
+        ("F1", f"{best['f1']:.3f}", "Balance of the two above", "neutral"),
+        ("PR-AUC", f"{best['pr_auc']:.3f}", "Robust to the class imbalance", "neutral"),
+    ]
+    for col, (label, value, note, status) in zip(cols, tiles):
+        with col:
+            st.markdown(render_stat_tile(label, value, note, status), unsafe_allow_html=True)
+
+    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="panel-head"><div class="panel-title">All candidates</div>'
+        '<div class="panel-note">Test split, best value per column highlighted</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    table = pd.DataFrame(
+        [
+            {
+                "Model": r["model"],
+                "Precision": r["precision"],
+                "Recall": r["recall"],
+                "F1": r["f1"],
+                "PR-AUC": r["pr_auc"],
+                "ROC-AUC": r["roc_auc"],
+                "Brier": r["brier_score"],
+            }
+            for r in test_results
+        ]
+    )
+
+    st.dataframe(
+        table.style.highlight_max(
+            subset=["Precision", "Recall", "F1", "PR-AUC", "ROC-AUC"], color="#16331f"
+        )
+        .highlight_min(subset=["Brier"], color="#16331f")
+        .format({c: "{:.4f}" for c in table.columns if c != "Model"}),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    # Grouped bars: one slot per model, assigned in fixed order.
+    metrics = [("precision", "Precision"), ("recall", "Recall"), ("f1", "F1"),
+               ("pr_auc", "PR-AUC"), ("roc_auc", "ROC-AUC")]
+    fig = go.Figure()
+    for i, r in enumerate(test_results):
+        fig.add_trace(
+            go.Bar(
+                name=r["model"],
+                x=[label for _, label in metrics],
+                y=[r[key] for key, _ in metrics],
+                marker_color=SERIES[i % len(SERIES)],
+                marker_line=dict(width=2, color=TOKENS["surface"]),
+                hovertemplate=f"{r['model']}<br>%{{x}}: %{{y:.4f}}<extra></extra>",
+            )
+        )
+    fig.update_layout(
+        **plotly_layout(
+            height=320,
+            show_legend=True,
+            y_title="Score",
+            barmode="group",
+            bargap=0.28,
+            yaxis=dict(
+                range=[0, 1.05],
+                gridcolor=TOKENS["grid"],
+                tickfont=dict(size=11, color=TOKENS["ink_muted"]),
+                title_font=dict(size=11, color=TOKENS["ink_muted"]),
+            ),
+        )
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown(
+        '<div class="disclaimer">Accuracy is deliberately absent. With roughly '
+        "97 percent of assets running normally, a model that predicts "
+        '"no failure" every time scores 97 percent accurate and catches nothing. '
+        "F1 and PR-AUC both stay honest under that imbalance.</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ============================================================================
+# Curves
+# ============================================================================
+
+def _render_curves(all_models, X_test, y_test) -> None:
+    """Render ROC and precision-recall curves side by side."""
+    left, right = st.columns(2, gap="medium")
+
+    with left:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="panel-head"><div class="panel-title">ROC</div>'
+            '<div class="panel-note">True positives against false positives</div></div>',
+            unsafe_allow_html=True,
+        )
+        fig = go.Figure()
+        fig.add_trace(
+            go.Scatter(
+                x=[0, 1], y=[0, 1], mode="lines",
+                line=dict(dash="dash", color=TOKENS["border_strong"], width=1),
+                name="Chance", hoverinfo="skip", showlegend=False,
+            )
+        )
+        for i, (name, model) in enumerate(all_models.items()):
             try:
-                y_prob = model_obj.predict_proba(X_test)[:, 1]
-                prob_true, prob_pred = calibration_curve(y_test, y_prob, n_bins=10)
-                fig_cal.add_trace(go.Scatter(
-                    x=prob_pred, y=prob_true,
-                    mode="lines+markers",
-                    name=name,
-                    line=dict(width=2),
-                ))
+                y_prob = model.predict_proba(X_test)[:, 1]
             except Exception:
                 continue
-
-        # Diagonal reference line
-        fig_cal.add_trace(go.Scatter(
-            x=[0, 1], y=[0, 1],
-            mode="lines",
-            line=dict(dash="dash", color="rgba(255,255,255,0.2)", width=1),
-            name="Perfectly Calibrated",
-            showlegend=False,
-        ))
-
-        fig_cal.update_layout(
-            height=450,
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#94a3b8"),
-            xaxis_title="Mean Predicted Probability",
-            yaxis_title="Fraction of Positives",
-            margin=dict(t=20, b=40, l=40, r=20),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            xaxis=dict(gridcolor="#2a3a4e", zerolinecolor="#2a3a4e"),
-            yaxis=dict(gridcolor="#2a3a4e", zerolinecolor="#2a3a4e"),
+            fpr, tpr, _ = roc_curve(y_test, y_prob)
+            fig.add_trace(
+                go.Scatter(
+                    x=fpr, y=tpr, mode="lines",
+                    name=f"{name} ({auc(fpr, tpr):.3f})",
+                    line=dict(width=2, color=SERIES[i % len(SERIES)]),
+                    hovertemplate=f"{name}<br>FPR %{{x:.3f}} / TPR %{{y:.3f}}<extra></extra>",
+                )
+            )
+        fig.update_layout(
+            **plotly_layout(
+                height=400, show_legend=True,
+                x_title="False positive rate", y_title="True positive rate",
+            )
         )
-        st.plotly_chart(fig_cal, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
-    # ========================================================================
-    # TAB 5 — Ablation Study
-    # ========================================================================
-
-    with tabs[4]:
-        st.markdown("### Feature Engineering Impact Analysis")
-
-        ablation = load_results_fn("ablation_results.json")
-
-        if ablation:
-            st.markdown("#### Feature Engineering Impact")
-
-            if "without_feature_engineering" in ablation and "with_feature_engineering" in ablation:
-                abl_df = pd.DataFrame([
-                    {
-                        "Condition": "Without Feature Engineering",
-                        "F1-Score": ablation["without_feature_engineering"]["f1"],
-                        "PR-AUC": ablation["without_feature_engineering"]["pr_auc"],
-                    },
-                    {
-                        "Condition": "With Feature Engineering",
-                        "F1-Score": ablation["with_feature_engineering"]["f1"],
-                        "PR-AUC": ablation["with_feature_engineering"]["pr_auc"],
-                    },
-                ])
-
-                st.dataframe(abl_df, use_container_width=True, hide_index=True)
-
-                f1_diff = (ablation["with_feature_engineering"]["f1"]
-                           - ablation["without_feature_engineering"]["f1"])
-                if f1_diff > 0:
-                    st.success(f"✅ Feature engineering improved F1-Score by "
-                               f"**{f1_diff:.4f}** ({f1_diff*100:.2f}%)")
-                else:
-                    st.info(f"Feature engineering F1 difference: {f1_diff:.4f}")
-        else:
-            st.info("Ablation results not found. Run the training pipeline to generate.")
-
-        st.markdown("""
-        ### Engineering Design Decisions
-
-        | Design Aspect | Rationale | Impact |
-        |---|---|---|
-        | **Class Imbalance** | Handled using `class_weight='balanced'` | Prevents model bias towards majority class (No Failure) |
-        | **Probability Calibration** | Calibrated using Isotonic Regression | Corrects probability scaling for precise risk estimates |
-        """)
-
-    # ========================================================================
-    # TAB 6 — Business Cost Evaluation
-    # ========================================================================
-
-    with tabs[5]:
-        st.markdown("### 💼 Financial ROI Comparison Across ML Models")
+    with right:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
         st.markdown(
-            "This view translates standard machine learning metrics into financial metrics, "
-            "showing the estimated costs and savings associated with deploying each candidate model."
+            '<div class="panel-head"><div class="panel-title">Precision-recall</div>'
+            '<div class="panel-note">The honest view under imbalance</div></div>',
+            unsafe_allow_html=True,
+        )
+        baseline = float(y_test.mean())
+        fig = go.Figure()
+        fig.add_hline(
+            y=baseline, line_dash="dash", line_color=TOKENS["border_strong"], line_width=1,
+            annotation_text=f"Chance ({baseline:.3f})",
+            annotation_font=dict(size=10, color=TOKENS["ink_muted"]),
+        )
+        for i, (name, model) in enumerate(all_models.items()):
+            try:
+                y_prob = model.predict_proba(X_test)[:, 1]
+            except Exception:
+                continue
+            precision, recall, _ = precision_recall_curve(y_test, y_prob)
+            fig.add_trace(
+                go.Scatter(
+                    x=recall, y=precision, mode="lines",
+                    name=f"{name} ({average_precision_score(y_test, y_prob):.3f})",
+                    line=dict(width=2, color=SERIES[i % len(SERIES)]),
+                    hovertemplate=f"{name}<br>Recall %{{x:.3f}} / Precision %{{y:.3f}}<extra></extra>",
+                )
+            )
+        fig.update_layout(
+            **plotly_layout(height=400, show_legend=True, x_title="Recall", y_title="Precision")
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown(
+        '<div class="disclaimer">ROC looks flattering on an imbalanced problem '
+        "because the false positive rate is divided by a very large negative "
+        "class. The precision-recall curve divides by the flagged set instead, "
+        "so it exposes the cost of over-flagging.</div>",
+        unsafe_allow_html=True,
+    )
+
+
+# ============================================================================
+# Confusion
+# ============================================================================
+
+def _render_confusion(test_results, best_name: str) -> None:
+    """Render the confusion matrix and per-class report for one model."""
+    if not test_results:
+        st.caption("No results to show.")
+        return
+
+    names = [r["model"] for r in test_results]
+    chosen = st.selectbox(
+        "Model", names, index=names.index(best_name) if best_name in names else 0, key="cm_model"
+    )
+    result = next(r for r in test_results if r["model"] == chosen)
+    cm = result["confusion_matrix"]
+    tn, fp, fn, tp = cm[0][0], cm[0][1], cm[1][0], cm[1][1]
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.markdown(
+            render_stat_tile("Caught", f"{tp:,}", "Failures correctly flagged", "good"),
+            unsafe_allow_html=True,
+        )
+    with c2:
+        st.markdown(
+            render_stat_tile("Missed", f"{fn:,}", "Failures that slipped through", "critical"),
+            unsafe_allow_html=True,
+        )
+    with c3:
+        st.markdown(
+            render_stat_tile("False alarms", f"{fp:,}", "Healthy assets flagged", "warning"),
+            unsafe_allow_html=True,
+        )
+    with c4:
+        st.markdown(
+            render_stat_tile("Correctly cleared", f"{tn:,}", "Healthy assets passed", "neutral"),
+            unsafe_allow_html=True,
         )
 
-        if test_results:
-            cost_results = []
-            failure_cost_unit = sim_downtime_cost * sim_downtime_hours
+    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+    left, right = st.columns([1, 1], gap="medium")
 
-            for r in test_results:
-                cm = r.get("confusion_matrix")
-                if not cm:
-                    continue
-                tn, fp, fn, tp = cm[0][0], cm[0][1], cm[1][0], cm[1][1]
+    with left:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="panel-head"><div class="panel-title">Confusion matrix</div></div>',
+            unsafe_allow_html=True,
+        )
+        labels = ["Ran normally", "Failed"]
+        fig = go.Figure(
+            go.Heatmap(
+                z=cm,
+                x=labels,
+                y=labels,
+                colorscale=[[i / (len(SEQUENTIAL) - 1), c] for i, c in enumerate(SEQUENTIAL)],
+                reversescale=True,
+                text=[[f"{v:,}" for v in row] for row in cm],
+                texttemplate="%{text}",
+                textfont={"size": 17, "color": TOKENS["ink"]},
+                showscale=False,
+                xgap=3,
+                ygap=3,
+                hovertemplate="Actual %{y}, predicted %{x}: %{z:,}<extra></extra>",
+            )
+        )
+        fig.update_layout(
+            **plotly_layout(
+                height=300,
+                x_title="Predicted",
+                y_title="Actual",
+                margin=dict(t=8, b=48, l=100, r=8),
+                xaxis=dict(showgrid=False, showline=False,
+                           tickfont=dict(size=11, color=TOKENS["ink_secondary"])),
+                yaxis=dict(showgrid=False, showline=False, autorange="reversed",
+                           tickfont=dict(size=11, color=TOKENS["ink_secondary"])),
+            )
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
-                failures = tp + fn
-                run_to_failure = failures * failure_cost_unit
-                
-                predictive_cost = (tp * sim_preventive_cost) + (fp * sim_false_alarm_cost) + (fn * failure_cost_unit) + sim_license_cost
-                savings = run_to_failure - predictive_cost
-                model_roi = (savings / predictive_cost * 100) if predictive_cost > 0 else 0
-
-                cost_results.append({
-                    "Model": r["model"],
-                    "Precision": r["precision"],
-                    "Recall": r["recall"],
-                    "F1-Score": r["f1"],
-                    "Unscheduled Failures Missed (FN)": fn,
-                    "False Alarms (FP)": fp,
-                    "Total Operations Cost": predictive_cost,
-                    "Net Savings ($)": savings,
-                    "ROI (%)": model_roi
-                })
-
-            cost_df = pd.DataFrame(cost_results)
-
+    with right:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="panel-head"><div class="panel-title">Per-class report</div></div>',
+            unsafe_allow_html=True,
+        )
+        report = result.get("classification_report", {})
+        if report:
             st.dataframe(
-                cost_df.style.highlight_max(
-                    subset=["Net Savings ($)", "ROI (%)"],
-                    color="#1a3a2a",
-                ).highlight_min(
-                    subset=["Total Operations Cost", "Unscheduled Failures Missed (FN)", "False Alarms (FP)"],
-                    color="#1a3a2a",
-                ).format({
-                    "Precision": "{:.4f}",
-                    "Recall": "{:.4f}",
-                    "F1-Score": "{:.4f}",
-                    "Total Operations Cost": "${:,.2f}",
-                    "Net Savings ($)": "${:,.2f}",
-                    "ROI (%)": "{:.1f}%",
-                }),
-                use_container_width=True,
-                hide_index=True,
+                pd.DataFrame(report).T.style.format("{:.4f}"), use_container_width=True
             )
+        else:
+            st.caption("No classification report saved for this model.")
+        st.markdown("</div>", unsafe_allow_html=True)
 
-            st.markdown("<br>", unsafe_allow_html=True)
 
-            fig_compare = go.Figure()
-            
-            # Get test failures count
-            failures_test = next(
-                (r.get("confusion_matrix", [[0,0],[0,0]])[1][0] + r.get("confusion_matrix", [[0,0],[0,0]])[1][1] 
-                 for r in test_results if r.get("confusion_matrix")), 
-                51
+# ============================================================================
+# Calibration
+# ============================================================================
+
+def _render_calibration(all_models, calibrated_model, best_name, X_test, y_test, load_results_fn) -> None:
+    """Render the reliability diagram and Brier scores."""
+    cal = load_results_fn("calibration_results.json")
+
+    if cal:
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown(
+                render_stat_tile("Brier, raw", f"{cal['brier_uncalibrated']:.4f}",
+                                 "Before calibration", "neutral"),
+                unsafe_allow_html=True,
             )
-            run_to_failure_baseline = failures_test * failure_cost_unit
-
-            fig_compare.add_trace(go.Bar(
-                name="Run to Failure (Baseline)",
-                x=cost_df["Model"],
-                y=[run_to_failure_baseline] * len(cost_df),
-                marker_color="#ef4444",
-                opacity=0.6,
-            ))
-
-            fig_compare.add_trace(go.Bar(
-                name="Total AI Maintenance Cost",
-                x=cost_df["Model"],
-                y=cost_df["Total Operations Cost"],
-                marker_color="#3b82f6",
-            ))
-
-            fig_compare.add_trace(go.Bar(
-                name="Net Financial Savings",
-                x=cost_df["Model"],
-                y=cost_df["Net Savings ($)"],
-                marker_color="#22c55e",
-            ))
-
-            fig_compare.update_layout(
-                barmode="group",
-                title="Financial Impact Comparison Across Candidate Models",
-                title_font=dict(size=15, color="#e2e8f0"),
-                height=350,
-                margin=dict(t=40, b=10, l=10, r=10),
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#94a3b8"),
-                yaxis_title="USD ($)",
+        with c2:
+            st.markdown(
+                render_stat_tile("Brier, calibrated", f"{cal['brier_calibrated']:.4f}",
+                                 f"{cal.get('method', 'isotonic').title()} regression", "good"),
+                unsafe_allow_html=True,
             )
-
-            st.plotly_chart(fig_compare, use_container_width=True)
-
-            st.info(
-                "💡 **Strategic Insight**: Notice that models optimizing for higher **F1-Score / Recall** (like XGBoost and HistGradientBoosting) "
-                "significantly reduce **Unscheduled Failures Missed (FN)**. Since unexpected downtime is extremely expensive "
-                f"(${sim_downtime_cost:,.0f}/hr), reducing FNs yields massive savings, easily outweighing the cost of a few "
-                "False Alarms (FP)."
+        with c3:
+            improvement = cal["improvement"]
+            st.markdown(
+                render_stat_tile(
+                    "Improvement", f"{improvement:+.4f}",
+                    "Lower Brier is better", "good" if improvement > 0 else "warning",
+                ),
+                unsafe_allow_html=True,
             )
+        st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="panel-head"><div class="panel-title">Reliability diagram</div>'
+        '<div class="panel-note">Closer to the diagonal means the probabilities can be trusted</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    models = dict(all_models)
+    if calibrated_model is not None:
+        models[f"{best_name}, calibrated"] = calibrated_model
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=[0, 1], y=[0, 1], mode="lines",
+            line=dict(dash="dash", color=TOKENS["border_strong"], width=1),
+            name="Perfect", hoverinfo="skip", showlegend=False,
+        )
+    )
+    for i, (name, model) in enumerate(models.items()):
+        try:
+            y_prob = model.predict_proba(X_test)[:, 1]
+            prob_true, prob_pred = calibration_curve(y_test, y_prob, n_bins=10)
+        except Exception:
+            continue
+        fig.add_trace(
+            go.Scatter(
+                x=prob_pred, y=prob_true, mode="lines+markers", name=name,
+                line=dict(width=2, color=SERIES[i % len(SERIES)]),
+                marker=dict(size=8, line=dict(width=2, color=TOKENS["surface"])),
+                hovertemplate=f"{name}<br>Predicted %{{x:.3f}} / observed %{{y:.3f}}<extra></extra>",
+            )
+        )
+    fig.update_layout(
+        **plotly_layout(
+            height=420, show_legend=True,
+            x_title="Mean predicted probability", y_title="Observed failure rate",
+        )
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown(
+        '<div class="disclaimer">A calibrated model that says 80 percent means '
+        "roughly 80 of every 100 such assets really do fail. That property is "
+        "what makes the cost arithmetic on the next tab meaningful — an "
+        "uncalibrated score can rank assets correctly while still being the "
+        "wrong number to multiply a cost by.</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ============================================================================
+# Ablation
+# ============================================================================
+
+def _render_ablation(load_results_fn) -> None:
+    """Render the feature-engineering ablation result."""
+    ablation = load_results_fn("ablation_results.json")
+
+    if not ablation or "with_feature_engineering" not in ablation:
+        st.markdown(
+            render_notice(
+                "Ablation not computed",
+                "The feature-engineering ablation runs as part of the full training "
+                "pipeline. Run <code>python scripts/train_pipeline.py --mode fast</code> "
+                "to generate it.",
+                "warning",
+            ),
+            unsafe_allow_html=True,
+        )
+    else:
+        without = ablation["without_feature_engineering"]
+        with_fe = ablation["with_feature_engineering"]
+        delta = with_fe["f1"] - without["f1"]
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown(
+                render_stat_tile("Raw sensors only", f"{without['f1']:.4f}", "F1 score", "neutral"),
+                unsafe_allow_html=True,
+            )
+        with c2:
+            st.markdown(
+                render_stat_tile("With derived features", f"{with_fe['f1']:.4f}", "F1 score", "accent"),
+                unsafe_allow_html=True,
+            )
+        with c3:
+            st.markdown(
+                render_stat_tile(
+                    "Difference", f"{delta:+.4f}",
+                    "Attributable to feature engineering",
+                    "good" if delta > 0 else "warning",
+                ),
+                unsafe_allow_html=True,
+            )
+        st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+
+    st.markdown(
+        """
+#### Why these features exist
+
+| Derived feature | Formula | The physics it captures |
+|:--|:--|:--|
+| Thermal margin | process temp − air temp | How well heat is leaving the machine |
+| Mechanical power | torque × speed × 2π / 60 | Actual work being done at the cut |
+| Load per unit speed | torque ÷ speed | Whether the drive is straining |
+| Accumulated strain | tool wear × torque | Cumulative stress on the tooling |
+| Thermal-speed stress | thermal margin × speed | Heat generated at operating speed |
+
+None of these is new information — each is a combination of readings the model
+already has. They help because a tree has to spend many splits to approximate a
+ratio or a product, and stating it directly spends none.
+        """
+    )
+
+
+# ============================================================================
+# Cost
+# ============================================================================
+
+def _cost_of(tp: int, fp: int, fn: int, failure_cost: float,
+             preventive: float, false_alarm: float, licence: float) -> float:
+    """Return the annual operating cost of running a model at one threshold."""
+    return tp * preventive + fp * false_alarm + fn * failure_cost + licence
+
+
+def _render_cost(all_models, calibrated_model, best_name, X_test, y_test, config) -> None:
+    """Render the cost comparison and the cost-optimal threshold sweep."""
+    business = config.get("business", {})
+
+    st.markdown(
+        render_notice(
+            "What this tab does",
+            "Every confusion-matrix cell is priced, so the model choice and the "
+            "alert threshold become a currency decision rather than a metric one. "
+            "Change the figures below to your own plant's numbers.",
+            "accent",
+        ),
+        unsafe_allow_html=True,
+    )
+
+    # Controls live on the page, not the global sidebar, so they stay next to
+    # the numbers they change.
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        downtime_cost = st.number_input(
+            "Downtime ($/hr)", min_value=0.0, step=500.0,
+            value=float(business.get("downtime_cost_per_hour", 10000.0)), key="cost_downtime",
+        )
+    with c2:
+        downtime_hours = st.number_input(
+            "Recovery (hrs)", min_value=0.1, step=0.5,
+            value=float(business.get("avg_downtime_hours", 4.0)), key="cost_hours",
+        )
+    with c3:
+        preventive = st.number_input(
+            "Planned fix ($)", min_value=0.0, step=100.0,
+            value=float(business.get("preventive_action_cost", 1500.0)), key="cost_preventive",
+        )
+    with c4:
+        false_alarm = st.number_input(
+            "False alarm ($)", min_value=0.0, step=100.0,
+            value=float(business.get("false_alarm_cost", 1500.0)), key="cost_false_alarm",
+        )
+    with c5:
+        licence = st.number_input(
+            "Platform ($/mo)", min_value=0.0, step=500.0,
+            value=float(business.get("license_cost_monthly", 2500.0)), key="cost_licence",
+        )
+
+    failure_cost = downtime_cost * downtime_hours
+
+    # ------------------------------------------------------ model comparison
+    rows = []
+    for name, model in all_models.items():
+        try:
+            y_prob = model.predict_proba(X_test)[:, 1]
+        except Exception:
+            continue
+        tn, fp, fn, tp = confusion_matrix(y_test, (y_prob >= 0.5).astype(int)).ravel()
+        reactive = (tp + fn) * failure_cost
+        predictive = _cost_of(tp, fp, fn, failure_cost, preventive, false_alarm, licence)
+        rows.append(
+            {
+                "Model": name,
+                "Missed failures": int(fn),
+                "False alarms": int(fp),
+                "Reactive cost": reactive,
+                "With the model": predictive,
+                "Avoided": reactive - predictive,
+                "Return": (reactive - predictive) / predictive * 100 if predictive else 0.0,
+            }
+        )
+
+    if not rows:
+        st.caption("No model could be scored.")
+        return
+
+    cost_df = pd.DataFrame(rows).sort_values("Avoided", ascending=False)
+    top = cost_df.iloc[0]
+
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    k1, k2, k3 = st.columns(3)
+    with k1:
+        st.markdown(
+            render_stat_tile(
+                "Cost of one failure", f"${failure_cost:,.0f}",
+                f"{downtime_hours:.1f} hrs at ${downtime_cost:,.0f}/hr", "critical",
+            ),
+            unsafe_allow_html=True,
+        )
+    with k2:
+        st.markdown(
+            render_stat_tile(
+                "Best avoided cost", f"${top['Avoided']:,.0f}",
+                f"{top['Model']}, on this test split", "good",
+            ),
+            unsafe_allow_html=True,
+        )
+    with k3:
+        st.markdown(
+            render_stat_tile(
+                "Return on the spend", f"{top['Return']:,.0f}%",
+                "Avoided cost over total cost", "good",
+            ),
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="panel-head"><div class="panel-title">Cost by model</div>'
+        f'<div class="panel-note">Over the {len(y_test):,} assets in the test split</div></div>',
+        unsafe_allow_html=True,
+    )
+    st.dataframe(
+        cost_df.style.format(
+            {
+                "Reactive cost": "${:,.0f}",
+                "With the model": "${:,.0f}",
+                "Avoided": "${:,.0f}",
+                "Return": "{:,.0f}%",
+            }
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ------------------------------------------------- threshold sweep
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="panel-head"><div class="panel-title">Where to set the alert threshold</div>'
+        '<div class="panel-note">Total cost against the flagging threshold</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    model = calibrated_model if calibrated_model is not None else all_models.get(best_name)
+    if model is None:
+        st.caption("No model available for the sweep.")
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
+    y_prob = model.predict_proba(X_test)[:, 1]
+    thresholds = np.linspace(0.02, 0.98, 97)
+    costs, missed, alarms = [], [], []
+    for threshold in thresholds:
+        tn, fp, fn, tp = confusion_matrix(y_test, (y_prob >= threshold).astype(int)).ravel()
+        costs.append(_cost_of(tp, fp, fn, failure_cost, preventive, false_alarm, licence))
+        missed.append(int(fn))
+        alarms.append(int(fp))
+
+    best_idx = int(np.argmin(costs))
+    best_threshold = float(thresholds[best_idx])
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=thresholds, y=costs, mode="lines",
+            line=dict(width=2, color=SERIES[0]), name="Total cost",
+            hovertemplate="Threshold %{x:.2f}<br>Cost $%{y:,.0f}<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=[best_threshold], y=[costs[best_idx]], mode="markers",
+            marker=dict(size=11, color=TOKENS["good"], line=dict(width=2, color=TOKENS["surface"])),
+            name=f"Cheapest at {best_threshold:.2f}",
+            hovertemplate=f"Cheapest: threshold {best_threshold:.2f}"
+                          f"<br>Cost $%{{y:,.0f}}<extra></extra>",
+        )
+    )
+    fig.add_vline(
+        x=0.5, line_dash="dash", line_color=TOKENS["border_strong"], line_width=1,
+        annotation_text="Default 0.50",
+        annotation_font=dict(size=10, color=TOKENS["ink_muted"]),
+    )
+    fig.update_layout(
+        **plotly_layout(
+            height=320, show_legend=True,
+            x_title="Flag an asset when failure probability exceeds",
+            y_title="Total cost ($)",
+        )
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    saving_vs_default = _cost_of(
+        *_counts_at(y_test, y_prob, 0.5), failure_cost, preventive, false_alarm, licence
+    ) - costs[best_idx]
+
+    st.markdown(
+        render_notice(
+            f"Cheapest threshold is {best_threshold:.2f}, not 0.50",
+            f"At {best_threshold:.2f} the model misses {missed[best_idx]} failures and "
+            f"raises {alarms[best_idx]} false alarms, for a total of "
+            f"${costs[best_idx]:,.0f} — "
+            + (
+                f"${saving_vs_default:,.0f} less than the default 0.50 threshold."
+                if saving_vs_default > 0
+                else "which the default 0.50 threshold already matches."
+            )
+            + " A missed failure costs far more than a needless inspection, so the "
+            "arithmetic favours flagging early.",
+            "good" if saving_vs_default > 0 else "accent",
+        ),
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def _counts_at(y_test, y_prob, threshold: float):
+    """Return ``(tp, fp, fn)`` at a given decision threshold."""
+    tn, fp, fn, tp = confusion_matrix(y_test, (y_prob >= threshold).astype(int)).ravel()
+    return int(tp), int(fp), int(fn)

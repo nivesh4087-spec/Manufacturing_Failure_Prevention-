@@ -235,8 +235,19 @@ def render_sidebar(artifacts_ready: bool) -> None:
             unsafe_allow_html=True,
         )
 
-        selected = st.radio("Navigation", list(PAGES), label_visibility="collapsed")
-        st.session_state.current_page = selected
+        # Bound to session state by key, and seeded with the current page's
+        # index, so the selection survives a rerun and can be driven
+        # programmatically (the guide's links, and the headless tests).
+        page_names = list(PAGES)
+        current = st.session_state.get("current_page", page_names[0])
+        st.radio(
+            "Navigation",
+            page_names,
+            index=page_names.index(current) if current in page_names else 0,
+            label_visibility="collapsed",
+            key="nav_choice",
+        )
+        st.session_state.current_page = st.session_state.nav_choice
 
         st.markdown("<hr>", unsafe_allow_html=True)
 
