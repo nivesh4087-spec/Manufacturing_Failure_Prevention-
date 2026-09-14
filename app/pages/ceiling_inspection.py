@@ -1,176 +1,519 @@
 """
-False Ceiling Defect Inspection & Ingestion Hub
-=================================================
-Industrial Visual Defect Detection & Telemetry Ingestion Module.
+Defect Inspection
+=================
+Line 2: the optical inspection cell that checks finished tiles, and the link
+between its reject rate and the condition of the Line 1 machinery.
+
+The inspection cell is described by ``config.inspection`` rather than by literals
+here. The tool-wear relationship is computed from the dataset at runtime, so the
+figures on this page are measurements rather than claims.
 """
 
-import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.express as px
+from __future__ import annotations
+
 from pathlib import Path
+from typing import Any, Dict, List
+
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+import streamlit as st
+
+from app.components.data_access import active_dataset
+from app.components.styles import (
+    SERIES,
+    TOKENS,
+    panel,
+    plotly_layout,
+    render_footer,
+    render_kv_rows,
+    render_masthead,
+    render_notice,
+    render_pill,
+    render_stat_tile,
+)
+
+#: BGR colours for the synthetic frame, drawn from the shared status tokens so
+#: the overlay matches the rest of the interface.
+_OVERLAY_BGR = {
+    "critical": (59, 59, 208),
+    "serious": (90, 131, 236),
+    "warning": (25, 178, 250),
+    "good": (12, 163, 12),
+}
 
 
-def draw_simulated_tile_inspection(tile_type: str, defect_type: str, confidence: float):
-    """Generate a simulated high-resolution tile inspection canvas with detected defects."""
+def draw_inspection_frame(defect_name: str, severity: str, confidence: float) -> np.ndarray:
+    """Render a synthetic inspection frame with the detection overlay.
+
+    This stands in for a live camera feed so the page is demonstrable without
+    plant hardware attached. The geometry is illustrative; the detection methods
+    it represents are listed in ``config.inspection.defects``.
+
+    Args:
+        defect_name: Which defect to draw, or ``"None"`` for a passing tile.
+        severity: Status token driving the overlay colour.
+        confidence: Detector confidence, shown in the caption.
+
+    Returns:
+        An RGB image array ready for ``st.image``.
+    """
     import cv2
 
-    # Create synthetic image of false ceiling tile
-    h, w = 400, 600
-    img = np.full((h, w, 3), 235, dtype=np.uint8)
+    h, w = 420, 640
+    img = np.full((h, w, 3), 232, dtype=np.uint8)
 
-    # Acoustic perforation texture pattern
-    np.random.seed(42)
-    for _ in range(300):
-        cx = np.random.randint(20, w - 20)
-        cy = np.random.randint(20, h - 20)
-        r = np.random.randint(1, 3)
-        cv2.circle(img, (cx, cy), r, (180, 180, 180), -1)
+    # Acoustic perforation texture, seeded so the frame is stable across reruns.
+    rng = np.random.default_rng(42)
+    for _ in range(340):
+        cx, cy = int(rng.integers(24, w - 24)), int(rng.integers(24, h - 24))
+        cv2.circle(img, (cx, cy), int(rng.integers(1, 3)), (186, 186, 186), -1)
 
-    # Grid border
-    cv2.rectangle(img, (10, 10), (w - 10, h - 10), (80, 80, 80), 6)
-    cv2.rectangle(img, (15, 15), (w - 15, h - 15), (140, 140, 140), 2)
+    cv2.rectangle(img, (12, 12), (w - 12, h - 12), (84, 84, 84), 5)
+    cv2.rectangle(img, (18, 18), (w - 18, h - 18), (148, 148, 148), 2)
 
-    status_label = "PASS (NO DEFECT)"
+    colour = _OVERLAY_BGR.get(severity, _OVERLAY_BGR["critical"])
+    label = f"{defect_name.upper()} {confidence:.0%}"
 
-    if defect_type == "Sagging / Deformation":
-        status_label = f"DEFECT: SAGGING ({confidence:.1%})"
-        cv2.ellipse(img, (w // 2, h // 2), (180, 100), 0, 0, 360, (140, 140, 140), 3)
-        cv2.ellipse(img, (w // 2, h // 2), (120, 60), 0, 0, 360, (110, 110, 110), 2)
-        cv2.rectangle(img, (120, 90), (480, 310), (239, 68, 68), 3)
-        cv2.putText(img, status_label, (125, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (239, 68, 68), 2)
+    if defect_name == "Sagging or warp":
+        cv2.ellipse(img, (w // 2, h // 2), (190, 104), 0, 0, 360, (142, 142, 142), 3)
+        cv2.ellipse(img, (w // 2, h // 2), (126, 62), 0, 0, 360, (112, 112, 112), 2)
+        cv2.rectangle(img, (126, 94), (514, 326), colour, 3)
+        cv2.putText(img, label, (130, 84), cv2.FONT_HERSHEY_SIMPLEX, 0.58, colour, 2)
 
-    elif defect_type == "Water Stain / Moisture":
-        status_label = f"DEFECT: WATER STAIN ({confidence:.1%})"
-        cv2.circle(img, (380, 160), 75, (160, 190, 210), -1)
-        cv2.circle(img, (410, 190), 55, (140, 175, 200), -1)
-        cv2.rectangle(img, (290, 70), (480, 250), (245, 158, 11), 3)
-        cv2.putText(img, status_label, (295, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (245, 158, 11), 2)
+    elif defect_name == "Surface water stain":
+        cv2.circle(img, (408, 168), 78, (212, 192, 162), -1)
+        cv2.circle(img, (438, 198), 56, (202, 178, 142), -1)
+        cv2.rectangle(img, (310, 74), (512, 262), colour, 3)
+        cv2.putText(img, label, (314, 64), cv2.FONT_HERSHEY_SIMPLEX, 0.58, colour, 2)
 
-    elif defect_type == "Edge Chipping / Corner Crack":
-        status_label = f"DEFECT: EDGE CHIP ({confidence:.1%})"
-        pts = np.array([[10, 10], [80, 10], [10, 70]], np.int32)
-        cv2.fillPoly(img, [pts], (40, 40, 40))
-        cv2.rectangle(img, (5, 5), (110, 90), (239, 68, 68), 3)
-        cv2.putText(img, status_label, (10, 115), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (239, 68, 68), 2)
+    elif defect_name == "Edge chipping":
+        cv2.fillPoly(img, [np.array([[12, 12], [92, 12], [12, 78]], np.int32)], (44, 44, 44))
+        cv2.rectangle(img, (8, 8), (122, 98), colour, 3)
+        cv2.putText(img, label, (12, 126), cv2.FONT_HERSHEY_SIMPLEX, 0.58, colour, 2)
 
-    elif defect_type == "T-Grid Misalignment":
-        status_label = f"DEFECT: GRID MISALIGNMENT ({confidence:.1%})"
-        cv2.line(img, (w // 2, 10), (w // 2 + 35, h - 10), (249, 115, 22), 4)
-        cv2.rectangle(img, (w // 2 - 20, 20), (w // 2 + 60, h - 20), (249, 115, 22), 3)
-        cv2.putText(img, status_label, (w // 2 - 90, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (249, 115, 22), 2)
+    elif defect_name == "T-grid misalignment":
+        cv2.line(img, (w // 2, 12), (w // 2 + 38, h - 12), colour, 4)
+        cv2.rectangle(img, (w // 2 - 24, 22), (w // 2 + 66, h - 22), colour, 3)
+        cv2.putText(img, label, (w // 2 - 96, 44), cv2.FONT_HERSHEY_SIMPLEX, 0.58, colour, 2)
 
     else:
-        cv2.putText(img, status_label, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (16, 185, 129), 2)
+        good = _OVERLAY_BGR["good"]
+        cv2.rectangle(img, (24, 24), (w - 24, h - 24), good, 2)
+        cv2.putText(img, f"PASS {confidence:.0%}", (28, 56),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.62, good, 2)
 
-    return img
+    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
 
-def render_page(project_root: Path, load_artifacts_fn, load_raw_dataset_fn):
-    """Render False Ceiling Defect Inspection & Ingestion Hub page."""
-    st.markdown("""
-    <div style="background: #111827; border: 1px solid #1f2937; border-radius: 6px; padding: 18px 24px; margin-bottom: 20px;">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div>
-                <h2 style="margin: 0; font-size: 1.35rem; font-weight: 700; color: #f3f4f6;">
-                    False Ceiling Defect Inspection & Data Ingestion System
-                </h2>
-                <p style="margin: 4px 0 0 0; font-size: 0.85rem; color: #9ca3af;">
-                    Automated Optical Inspection (AOI) & Machinery Telemetry Stream Gateway for Ceiling Tile Manufacturing
-                </p>
-            </div>
-            <div style="text-align: right;">
-                <span class="status-badge status-normal">LIVE INGESTION ACTIVE</span>
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+@st.cache_data(show_spinner=False)
+def tool_wear_failure_profile(
+    _df: pd.DataFrame, target_col: str, bin_width: int = 20
+) -> pd.DataFrame:
+    """Measure how the failure rate rises with accumulated tool wear.
 
-    tab1, tab2, tab3 = st.tabs([
-        "📹 Live Camera Stream & AOI",
-        "🌐 Ingestion Data Pipeline Architecture",
-        "⚙️ Machinery Telemetry & Correlation",
-    ])
+    This replaces what used to be a randomly generated curve. Binning the real
+    dataset gives a defensible basis for a replacement interval instead of an
+    asserted one.
 
-    with tab1:
-        st.markdown("#### High-Speed Conveyor Camera Ingestion (RTSP / GigE Vision)")
-        st.caption("Simulating real-time tile inspection stream from Line 2 Stamping & Finishing Conveyor.")
+    Args:
+        _df: The raw dataset.
+        target_col: Name of the failure column.
+        bin_width: Width of each tool-wear bucket, in minutes.
 
-        col1, col2 = st.columns([2, 1])
+    Returns:
+        One row per bucket with ``assets``, ``failures``, ``failure_rate`` and,
+        where the column exists, the tool-wear-specific ``twf`` count.
+    """
+    wear_col = "Tool wear [min]"
+    frame = _df[[wear_col, target_col]].copy()
+    if "TWF" in _df.columns:
+        frame["TWF"] = _df["TWF"]
 
-        with col2:
-            st.markdown("##### Camera Stream Settings")
-            camera_source = st.selectbox(
-                "Ingestion Protocol / Source",
-                ["RTSP Stream (rtsp://192.168.1.120:554/cam2)", "GigE Vision Industrial Camera", "HTTP REST API Post Webhook", "Hot-Folder File Watcher"],
-                index=0
+    upper = int(np.ceil(frame[wear_col].max() / bin_width) * bin_width)
+    edges = list(range(0, upper + bin_width, bin_width))
+    frame["bucket"] = pd.cut(frame[wear_col], bins=edges, right=True)
+
+    agg = {"assets": (target_col, "size"), "failures": (target_col, "sum")}
+    if "TWF" in frame.columns:
+        agg["twf"] = ("TWF", "sum")
+
+    grouped = frame.groupby("bucket", observed=True).agg(**agg).reset_index()
+    # .map over a categorical returns a categorical; cast so the midpoints
+    # can be compared and plotted numerically.
+    grouped["wear_midpoint"] = grouped["bucket"].map(
+        lambda b: (b.left + b.right) / 2
+    ).astype(float)
+    grouped["failure_rate"] = grouped["failures"] / grouped["assets"] * 100
+    if "twf" in grouped.columns:
+        grouped["twf_rate"] = grouped["twf"] / grouped["assets"] * 100
+    return grouped
+
+
+def recommended_change_point(profile: pd.DataFrame) -> Dict[str, Any]:
+    """Derive a tool-change threshold from the measured wear profile.
+
+    Picks the first bucket whose failure rate exceeds twice the rate of the
+    healthy region, then reports what changing the tooling at that point would
+    have avoided across the dataset.
+
+    Args:
+        profile: Output of :func:`tool_wear_failure_profile`.
+
+    Returns:
+        A dict with the threshold and the avoidable-failure arithmetic, or an
+        empty dict if no clear change point exists.
+    """
+    if profile.empty:
+        return {}
+
+    baseline = float(profile["failure_rate"].head(len(profile) // 2).mean())
+    elevated = profile[profile["failure_rate"] > baseline * 2]
+    if elevated.empty:
+        return {}
+
+    first = elevated.iloc[0]
+    threshold = int(first["bucket"].left)
+
+    after = profile[profile["wear_midpoint"] > threshold]
+    if "twf" in profile.columns:
+        avoidable = int(after["twf"].sum())
+        total = int(profile["twf"].sum())
+        kind = "tool-wear failures"
+    else:
+        avoidable = int(after["failures"].sum())
+        total = int(profile["failures"].sum())
+        kind = "failures"
+
+    return {
+        "threshold": threshold,
+        "baseline_rate": baseline,
+        "elevated_rate": float(first["failure_rate"]),
+        "avoidable": avoidable,
+        "total": total,
+        "share": (avoidable / total * 100) if total else 0.0,
+        "kind": kind,
+    }
+
+
+def render_page(project_root: Path, load_artifacts_fn, load_raw_dataset_fn) -> None:
+    """Render the Defect Inspection page."""
+    try:
+        _, config = load_artifacts_fn()
+    except Exception as exc:
+        st.markdown(render_notice("Configuration unavailable", str(exc), "critical"),
+                    unsafe_allow_html=True)
+        return
+
+    setup = config.get("inspection", {})
+    capture = setup.get("capture", {})
+    defects: List[Dict[str, str]] = setup.get("defects", [])
+
+    st.markdown(
+        render_masthead(
+            "Defect Inspection",
+            f"{setup.get('line_name', 'Inspection line')} — optical inspection of "
+            "finished tiles, and how its reject rate tracks machine condition upstream.",
+            f"{capture.get('resolution', '—')} at {capture.get('frame_rate_fps', '—')} fps"
+            f"<br>{capture.get('inference_latency_ms', '—')} ms per frame",
+        ),
+        unsafe_allow_html=True,
+    )
+
+    tab_cell, tab_link, tab_ingest = st.tabs(
+        ["Inspection cell", "Link to machine health", "How data arrives"]
+    )
+
+    with tab_cell:
+        _render_cell(setup, capture, defects)
+
+    with tab_link:
+        _render_link(config, load_raw_dataset_fn)
+
+    with tab_ingest:
+        _render_ingestion(capture)
+
+    st.markdown(
+        render_footer(
+            setup.get("line_name", "Inspection line"),
+            f"{len(defects)} defect classes configured",
+        ),
+        unsafe_allow_html=True,
+    )
+
+
+# ============================================================================
+# Inspection cell
+# ============================================================================
+
+def _render_cell(setup: Dict[str, Any], capture: Dict[str, Any], defects) -> None:
+    """Render the simulated camera view and its controls."""
+    frame_col, control_col = st.columns([2, 1], gap="medium")
+
+    with control_col:
+        with panel("Cell settings"):
+            sources = capture.get("sources", [])
+            st.selectbox(
+                "Capture source",
+                [s["label"] for s in sources] or ["Not configured"],
+                key="insp_source",
             )
-            tile_model = st.selectbox("Inspection Target", ["Mineral Fiber Acoustic Tile 600x600mm", "Gypsum Board False Ceiling Panel", "Aluminum Metal T-Grid Panel"])
-            simulated_defect = st.selectbox(
-                "Simulated Condition",
-                ["Normal (Pass)", "Sagging / Deformation", "Water Stain / Moisture", "Edge Chipping / Corner Crack", "T-Grid Misalignment"]
+            st.selectbox(
+                "Product", setup.get("products", ["Not configured"]), key="insp_product"
             )
-            confidence_input = st.slider("Detection Confidence Threshold", 0.50, 0.99, 0.92, 0.01)
+            defect_names = ["None — passing tile"] + [d["name"] for d in defects]
+            chosen = st.selectbox("Simulate condition", defect_names, key="insp_defect")
+            confidence = st.slider(
+                "Detector confidence", 0.50, 0.99, 0.92, 0.01, key="insp_conf"
+            )
 
-            st.markdown("---")
-            st.markdown("##### Frame Diagnostics")
-            st.markdown("- **Resolution**: `1920x1080 @ 60 FPS`\\n- **Inference Latency**: `12.4 ms`\\n- **Edge Hardware**: `NVIDIA Jetson AGX Orin`\\n- **Ingestion Buffer**: `0 Frames Dropped`")
+        with panel("Frame diagnostics"):
+            st.markdown(
+                render_kv_rows(
+                    {
+                        "Resolution": capture.get("resolution", "—"),
+                        "Frame rate": f"{capture.get('frame_rate_fps', '—')} fps",
+                        "Inference": f"{capture.get('inference_latency_ms', '—')} ms",
+                        "Edge device": capture.get("edge_device", "—"),
+                    }
+                ),
+                unsafe_allow_html=True,
+            )
 
-        with col1:
-            frame_img = draw_simulated_tile_inspection(tile_model, simulated_defect, confidence_input)
-            st.image(frame_img, caption="Conveyor Inspection Camera — Bounding Box Overlay", use_container_width=True)
+    selected = next((d for d in defects if d["name"] == chosen), None)
+    severity = selected["severity"] if selected else "good"
+    defect_name = selected["name"] if selected else "None"
 
-            if simulated_defect != "Normal (Pass)":
-                st.error(
-                    f"**INSPECTION ALERT** — {simulated_defect} detected on the conveyor line. "
-                    f"Quality score {(1.0 - confidence_input) * 100:.1f}/100. Tile diverted to rework station."
+    with frame_col:
+        with panel("Conveyor camera", "Detection overlay"):
+            try:
+                frame = draw_inspection_frame(defect_name, severity, confidence)
+                st.image(frame, use_container_width=True)
+            except ImportError:
+                st.markdown(
+                    render_notice(
+                        "OpenCV not installed",
+                        "The frame preview needs <code>opencv-python-headless</code>. "
+                        "Install the requirements to enable it.",
+                        "warning",
+                    ),
+                    unsafe_allow_html=True,
+                )
+
+            if selected:
+                st.markdown(
+                    render_notice(
+                        f"Reject — {selected['name']}",
+                        f"Detected by {selected['method'].lower()} at "
+                        f"{confidence:.0%} confidence. Tile diverted to rework.<br>"
+                        f"<strong>Likely upstream cause:</strong> {selected['cause']}",
+                        severity,
+                    ),
+                    unsafe_allow_html=True,
                 )
             else:
-                st.success(
-                    f"**INSPECTION PASS** — tile meets geometric and surface tolerance specification. "
-                    f"Quality score {confidence_input * 100:.1f}/100."
+                st.markdown(
+                    render_notice(
+                        "Pass",
+                        f"Tile is within geometric and surface tolerance at "
+                        f"{confidence:.0%} confidence.",
+                        "good",
+                    ),
+                    unsafe_allow_html=True,
                 )
 
-    with tab2:
-        st.markdown("#### How Software Receives Data in Production Environments")
-        st.markdown("""
-        In industrial false ceiling manufacturing & installation projects, the software receives data through a multi-tiered ingestion architecture:
+    with panel("Defect catalogue", "What the cell looks for, and why it happens"):
+        if defects:
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "Defect": d["name"],
+                            "Detection method": d["method"],
+                            "Upstream cause": d["cause"],
+                            "Severity": d["severity"].title(),
+                        }
+                        for d in defects
+                    ]
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.caption("No defect classes configured.")
 
-        - **1. Visual Inspection Stream (RTSP / GigE)**: High-speed overhead cameras stream video frames via RTSP (`rtsp://edge-cam:554/live`) or GigE Vision. The edge worker captures frames at 30-60 FPS, runs object detection to identify defects (cracks, sagging, moisture stains, T-grid gaps), and overlays bounding boxes.
-        - **2. IoT Sensor Telemetry (MQTT / OPC-UA / Modbus)**: Machine sensors (accelerometers, thermocouples, torque encoders) publish telemetry metrics over MQTT topics or OPC-UA servers directly to the ingestion pipeline.
-        - **3. Industrial PLC Push (REST API / Webhooks)**: Programmable Logic Controllers (Siemens S7, Allen-Bradley) trigger HTTP POST requests to `/api/v1/telemetry` or `/api/v1/inspect` on every cycle completion.
-        - **4. Network File System Watcher**: Batch Automated Optical Inspection (AOI) scanners deposit high-res inspection TIFF/JPEG images or CSV batch logs into shared network folders watched by background daemons.
-        """)
 
-        st.info("📌 **Data Ingestion Flow**: Edge Capture (RTSP/MQTT) ➔ Real-time Preprocessing ➔ Machine Failure & Defect Inference Model ➔ Risk Score Computation ➔ Command Center & SCADA Alerting.")
+# ============================================================================
+# Link to machine health
+# ============================================================================
 
-    with tab3:
-        st.markdown("#### Machinery Telemetry Correlation with Tile Defects")
-        st.caption("Cross-correlating equipment metrics (Stamping Tool Wear, Hydraulic Torque, Temp) with Visual Defect Rates.")
+def _render_link(config: Dict[str, Any], load_raw_dataset_fn) -> None:
+    """Render the measured relationship between tool wear and failures."""
+    df, source_label = active_dataset(load_raw_dataset_fn)
+    target_col = config["data"]["target_column"]
 
-        # Generate synthetic correlation data
-        np.random.seed(42)
-        n_points = 50
-        tool_wear = np.linspace(10, 240, n_points)
-        defect_rate = (tool_wear / 240.0) ** 2 * 12 + np.random.normal(0, 0.5, n_points)
-        defect_rate = np.clip(defect_rate, 0, 15)
-
-        fig = px.scatter(
-            x=tool_wear,
-            y=defect_rate,
-            labels={"x": "Stamping Tool Wear (Minutes)", "y": "Tile Edge Defect Rate (%)"},
-            title="Correlation: Stamping Tool Wear vs. False Ceiling Tile Edge Chipping",
-            trendline="lowess",
-            color=defect_rate,
-            color_continuous_scale="Reds",
+    if "Tool wear [min]" not in df.columns or target_col not in df.columns:
+        st.markdown(
+            render_notice(
+                "Not available for this dataset",
+                "This view needs the tool wear and failure columns, which the "
+                "active dataset does not carry.",
+                "warning",
+            ),
+            unsafe_allow_html=True,
         )
+        return
+
+    profile = tool_wear_failure_profile(df, target_col)
+    finding = recommended_change_point(profile)
+
+    st.markdown(
+        render_notice(
+            "Why a machine model belongs on a quality page",
+            "Edge chipping is caused by worn tooling, not by the tile. If the "
+            "punch and die are replaced before they degrade, the defect never "
+            "reaches Line 2. Everything below is measured from "
+            f"{len(df):,} assets in the active dataset ({source_label.lower()}), "
+            "not assumed.",
+            "accent",
+        ),
+        unsafe_allow_html=True,
+    )
+
+    if finding:
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown(
+                render_stat_tile(
+                    "Change tooling at", f"{finding['threshold']} min",
+                    "Where the failure rate first doubles", "accent",
+                ),
+                unsafe_allow_html=True,
+            )
+        with c2:
+            st.markdown(
+                render_stat_tile(
+                    "Failure rate after that point",
+                    f"{finding['elevated_rate']:.1f}%",
+                    f"Against {finding['baseline_rate']:.1f}% while healthy",
+                    "critical",
+                ),
+                unsafe_allow_html=True,
+            )
+        with c3:
+            st.markdown(
+                render_stat_tile(
+                    "Avoidable at that interval",
+                    f"{finding['share']:.0f}%",
+                    f"{finding['avoidable']} of {finding['total']} {finding['kind']}",
+                    "good",
+                ),
+                unsafe_allow_html=True,
+            )
+        st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+
+    with panel("Failure rate against accumulated tool wear",
+               "Each bar is a 20-minute bucket of the real dataset"):
+        colours = [
+            TOKENS["critical"]
+            if finding and mid > finding["threshold"]
+            else SERIES[0]
+            for mid in profile["wear_midpoint"]
+        ]
+        fig = go.Figure(
+            go.Bar(
+                x=profile["wear_midpoint"],
+                y=profile["failure_rate"],
+                marker_color=colours,
+                marker_line_width=0,
+                width=18,
+                customdata=profile[["assets", "failures"]].values,
+                hovertemplate="Tool wear around %{x:.0f} min<br>"
+                "Failure rate %{y:.2f}%<br>"
+                "%{customdata[1]} of %{customdata[0]} assets<extra></extra>",
+            )
+        )
+        if finding:
+            fig.add_vline(
+                x=finding["threshold"],
+                line_dash="dash",
+                line_color=TOKENS["warning"],
+                line_width=1,
+                annotation_text=f"Change at {finding['threshold']} min",
+                annotation_font=dict(size=10, color=TOKENS["warning"]),
+            )
         fig.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#f3f4f6", family="Inter"),
-            xaxis=dict(gridcolor="#1f2937", showline=True, linecolor="#374151"),
-            yaxis=dict(gridcolor="#1f2937", showline=True, linecolor="#374151"),
+            **plotly_layout(
+                height=320,
+                x_title="Accumulated tool wear (minutes)",
+                y_title="Failure rate (%)",
+            )
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        st.info("💡 **Key Finding**: When stamping tool wear exceeds **180 minutes**, false ceiling tile edge chipping increases exponentially (>8% defect rate). Replacing stamping blades proactively at 170 minutes eliminates 94% of tile edge defects.")
+        if finding:
+            st.markdown(
+                render_notice(
+                    f"The curve is flat until about {finding['threshold']} minutes",
+                    f"Below that point the failure rate sits near "
+                    f"{finding['baseline_rate']:.1f}% and barely moves — wear alone "
+                    f"is not causing failures. Past it the rate climbs steeply. "
+                    f"Replacing tooling at {finding['threshold']} minutes would have "
+                    f"put {finding['avoidable']} of the {finding['total']} "
+                    f"{finding['kind']} ({finding['share']:.0f}%) on the safe side of "
+                    "the line, which is the entire argument for a wear-based "
+                    "replacement interval over a fixed calendar one.",
+                    "good",
+                ),
+                unsafe_allow_html=True,
+            )
+
+    with st.expander("The numbers behind the chart"):
+        table = profile.copy()
+        table["Tool wear"] = table["bucket"].astype(str)
+        cols = {"Tool wear": "Tool wear (min)", "assets": "Assets",
+                "failures": "Failures", "failure_rate": "Failure rate %"}
+        if "twf" in table.columns:
+            cols["twf"] = "Tool-wear failures"
+        st.dataframe(
+            table[list(cols)].rename(columns=cols).round(2),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+
+# ============================================================================
+# Ingestion
+# ============================================================================
+
+def _render_ingestion(capture: Dict[str, Any]) -> None:
+    """Describe how telemetry and frames reach the platform."""
+    st.markdown(
+        "Nothing on this platform assumes a person uploads a file. In a running "
+        "plant, four paths feed it, and the dashboard is the read-only end of them."
+    )
+
+    for i, source in enumerate(capture.get("sources", []), start=1):
+        st.markdown(
+            f'<div class="action action-low">'
+            f'<div class="action-head"><span class="action-title">{i}. {source["label"]}</span>'
+            f'{render_pill("capture", "accent")}</div>'
+            f'<div class="action-trigger">{source["detail"]}</div></div>',
+            unsafe_allow_html=True,
+        )
+
+    with panel("Sensor and control paths"):
+        st.markdown(
+            """
+| Path | Protocol | What it carries |
+|:--|:--|:--|
+| Machine telemetry | MQTT, OPC-UA, Modbus | Thermocouples, torque encoders, spindle tachometers |
+| Cycle events | HTTP POST from the PLC | One record per completed cut |
+| Batch logs | Watched network share | CSV drops from the AOI scanner |
+| Historian backfill | SQL query | Replaying past shifts for model retraining |
+
+Everything lands in the same schema the **Batch Analysis** page accepts, so a
+file drop and a live feed follow the identical code path — which is what makes
+the file-upload workflow a genuine test of the production one.
+            """
+        )

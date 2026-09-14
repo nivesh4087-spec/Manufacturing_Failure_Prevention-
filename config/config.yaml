@@ -242,6 +242,50 @@ industry_mapping:
   "is_low_speed": "Spindle underspeed flag"
   "overload_indicator": "Stalling-cut overstrain flag"
 
+# --- Line 2: Automated Optical Inspection ---
+# Drives the Defect Inspection page. These describe the inspection cell itself;
+# the defect/tool-wear relationship shown on that page is computed from the
+# dataset at runtime rather than stated here.
+inspection:
+  line_name: "Line 2 — finishing and inspection"
+  capture:
+    sources:
+      - label: "RTSP stream"
+        detail: "rtsp://192.168.1.120:554/cam2"
+      - label: "GigE Vision camera"
+        detail: "Direct frame grab over the plant network"
+      - label: "REST webhook"
+        detail: "PLC posts a frame on cycle completion"
+      - label: "Hot-folder watcher"
+        detail: "AOI scanner writes to a watched share"
+    resolution: "1920x1080"
+    frame_rate_fps: 60
+    inference_latency_ms: 12.4
+    edge_device: "NVIDIA Jetson AGX Orin"
+  products:
+    - "Mineral fibre acoustic tile, 600x600 mm"
+    - "Gypsum board ceiling panel"
+    - "Aluminium T-grid section"
+  # Each defect names the detection method and the upstream machine condition
+  # that produces it, which is what ties Line 2 quality back to Line 1 health.
+  defects:
+    - name: "Edge chipping"
+      method: "Contour analysis on the cut edge"
+      cause: "Punch and die edge wear past its service limit"
+      severity: "critical"
+    - name: "Surface water stain"
+      method: "HSV colour thresholding"
+      cause: "Moisture ingress during curing or storage"
+      severity: "warning"
+    - name: "Sagging or warp"
+      method: "Ellipse fitting against the flat plane"
+      cause: "Board density below specification"
+      severity: "serious"
+    - name: "T-grid misalignment"
+      method: "Hough line transform on the rail"
+      cause: "Feed roller drift on the forming station"
+      severity: "serious"
+
 # --- Demo Scenarios ---
 demo_scenarios:
   normal:
