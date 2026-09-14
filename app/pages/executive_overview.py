@@ -24,6 +24,7 @@ from app.components.data_access import (
     get_type_mix,
 )
 from app.components.styles import (
+    panel,
     SERIES,
     TOKENS,
     plotly_layout,
@@ -163,227 +164,213 @@ def render_page(project_root: Path, load_artifacts_fn, load_dataset_fn, load_res
     left, right = st.columns([3, 2], gap="medium")
 
     with left:
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="panel-head"><div class="panel-title">Operating envelope</div>'
-            '<div class="panel-note">Each point is one asset</div></div>',
-            unsafe_allow_html=True,
-        )
+        with panel('Operating envelope', 'Each point is one asset'):
 
-        tab_torque, tab_wear, tab_thermal = st.tabs(
-            ["Speed against torque", "Tool wear", "Thermal margin"]
-        )
+            tab_torque, tab_wear, tab_thermal = st.tabs(
+                ["Speed against torque", "Tool wear", "Thermal margin"]
+            )
 
-        with tab_torque:
-            # Two-slot categorical split (flagged / not) keeps the all-pairs
-            # colour distance well clear of the floor.
-            fig = px.scatter(
-                scored,
-                x="Rotational speed [rpm]",
-                y="Torque [Nm]",
-                color="prediction",
-                color_discrete_map={"NO FAILURE": SERIES[0], "FAILURE": TOKENS["critical"]},
-                opacity=0.55,
-                custom_data=["risk_score", "risk_category"],
-            )
-            fig.update_traces(
-                marker=dict(size=5, line=dict(width=0)),
-                hovertemplate=(
-                    "%{x:,.0f} rpm &middot; %{y:.1f} Nm<br>"
-                    "Risk %{customdata[0]:.0f} — %{customdata[1]}<extra></extra>"
-                ),
-            )
-            fig.update_layout(
-                **plotly_layout(
-                    height=330,
-                    show_legend=True,
-                    x_title="Rotational speed (rpm)",
-                    y_title="Torque (Nm)",
-                    legend_title_text="",
+            with tab_torque:
+                # Two-slot categorical split (flagged / not) keeps the all-pairs
+                # colour distance well clear of the floor.
+                fig = px.scatter(
+                    scored,
+                    x="Rotational speed [rpm]",
+                    y="Torque [Nm]",
+                    color="prediction",
+                    color_discrete_map={"NO FAILURE": SERIES[0], "FAILURE": TOKENS["critical"]},
+                    opacity=0.55,
+                    custom_data=["risk_score", "risk_category"],
                 )
-            )
-            st.plotly_chart(fig, use_container_width=True)
-            st.caption(
-                "Failures concentrate in two corners: high torque at low speed "
-                "(overstrain) and low torque at high speed (power loss)."
-            )
-
-        with tab_wear:
-            fig = px.histogram(
-                scored,
-                x="Tool wear [min]",
-                color="risk_category",
-                category_orders={"risk_category": [b for b, _ in BAND_ORDER]},
-                color_discrete_sequence=_band_colors(),
-                nbins=40,
-            )
-            fig.update_traces(marker_line_width=0)
-            fig.update_layout(
-                **plotly_layout(
-                    height=330,
-                    show_legend=True,
-                    x_title="Tool wear (minutes)",
-                    y_title="Assets",
-                    barmode="stack",
-                    bargap=0.06,
-                    legend_title_text="",
+                fig.update_traces(
+                    marker=dict(size=5, line=dict(width=0)),
+                    hovertemplate=(
+                        "%{x:,.0f} rpm &middot; %{y:.1f} Nm<br>"
+                        "Risk %{customdata[0]:.0f} — %{customdata[1]}<extra></extra>"
+                    ),
                 )
-            )
-            st.plotly_chart(fig, use_container_width=True)
-            st.caption(
-                "Risk accumulates with wear rather than appearing suddenly, "
-                "which is what makes scheduled replacement effective."
-            )
-
-        with tab_thermal:
-            envelope = scored.assign(
-                thermal_margin=scored["Process temperature [K]"] - scored["Air temperature [K]"]
-            )
-            fig = px.histogram(
-                envelope,
-                x="thermal_margin",
-                color="risk_category",
-                category_orders={"risk_category": [b for b, _ in BAND_ORDER]},
-                color_discrete_sequence=_band_colors(),
-                nbins=40,
-            )
-            fig.update_traces(marker_line_width=0)
-            fig.update_layout(
-                **plotly_layout(
-                    height=330,
-                    show_legend=True,
-                    x_title="Process minus air temperature (K)",
-                    y_title="Assets",
-                    barmode="stack",
-                    bargap=0.06,
-                    legend_title_text="",
+                fig.update_layout(
+                    **plotly_layout(
+                        height=330,
+                        show_legend=True,
+                        x_title="Rotational speed (rpm)",
+                        y_title="Torque (Nm)",
+                        legend_title_text="",
+                    )
                 )
-            )
-            st.plotly_chart(fig, use_container_width=True)
-            st.caption(
-                "A narrow margin means heat is not leaving the process — the "
-                "signature that precedes a heat dissipation failure."
-            )
+                st.plotly_chart(fig, use_container_width=True)
+                st.caption(
+                    "Failures concentrate in two corners: high torque at low speed "
+                    "(overstrain) and low torque at high speed (power loss)."
+                )
 
-        st.markdown("</div>", unsafe_allow_html=True)
+            with tab_wear:
+                fig = px.histogram(
+                    scored,
+                    x="Tool wear [min]",
+                    color="risk_category",
+                    category_orders={"risk_category": [b for b, _ in BAND_ORDER]},
+                    color_discrete_sequence=_band_colors(),
+                    nbins=40,
+                )
+                fig.update_traces(marker_line_width=0)
+                fig.update_layout(
+                    **plotly_layout(
+                        height=330,
+                        show_legend=True,
+                        x_title="Tool wear (minutes)",
+                        y_title="Assets",
+                        barmode="stack",
+                        bargap=0.06,
+                        legend_title_text="",
+                    )
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                st.caption(
+                    "Risk accumulates with wear rather than appearing suddenly, "
+                    "which is what makes scheduled replacement effective."
+                )
+
+            with tab_thermal:
+                envelope = scored.assign(
+                    thermal_margin=scored["Process temperature [K]"] - scored["Air temperature [K]"]
+                )
+                fig = px.histogram(
+                    envelope,
+                    x="thermal_margin",
+                    color="risk_category",
+                    category_orders={"risk_category": [b for b, _ in BAND_ORDER]},
+                    color_discrete_sequence=_band_colors(),
+                    nbins=40,
+                )
+                fig.update_traces(marker_line_width=0)
+                fig.update_layout(
+                    **plotly_layout(
+                        height=330,
+                        show_legend=True,
+                        x_title="Process minus air temperature (K)",
+                        y_title="Assets",
+                        barmode="stack",
+                        bargap=0.06,
+                        legend_title_text="",
+                    )
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                st.caption(
+                    "A narrow margin means heat is not leaving the process — the "
+                    "signature that precedes a heat dissipation failure."
+                )
+
+
 
     with right:
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="panel-head"><div class="panel-title">Risk distribution</div></div>',
-            unsafe_allow_html=True,
-        )
+        with panel('Risk distribution'):
 
-        counts = [summary["band_counts"].get(band, 0) for band, _ in BAND_ORDER]
-        labels = [band.replace(" RISK", "").title() for band, _ in BAND_ORDER]
+            counts = [summary["band_counts"].get(band, 0) for band, _ in BAND_ORDER]
+            labels = [band.replace(" RISK", "").title() for band, _ in BAND_ORDER]
 
-        fig = go.Figure(
-            go.Bar(
-                x=counts,
-                y=labels,
-                orientation="h",
-                marker_color=_band_colors(),
-                marker_line_width=0,
-                text=[f"{c:,}" for c in counts],
-                textposition="outside",
-                textfont=dict(color=TOKENS["ink_secondary"], size=11),
-                hovertemplate="%{y}: %{x:,} assets<extra></extra>",
+            fig = go.Figure(
+                go.Bar(
+                    x=counts,
+                    y=labels,
+                    orientation="h",
+                    marker_color=_band_colors(),
+                    marker_line_width=0,
+                    text=[f"{c:,}" for c in counts],
+                    textposition="auto",
+                    textfont=dict(color=TOKENS["ink_secondary"], size=11),
+                    hovertemplate="%{y}: %{x:,} assets<extra></extra>",
+                )
             )
-        )
-        fig.update_layout(
-            **plotly_layout(
-                height=190,
-                x_title=None,
-                y_title=None,
-                margin=dict(t=8, b=8, l=8, r=52),
-                xaxis=dict(visible=False),
-                yaxis=dict(
-                    autorange="reversed",
-                    tickfont=dict(size=11, color=TOKENS["ink_secondary"]),
-                    showgrid=False,
-                    showline=False,
-                ),
+            fig.update_layout(
+                **plotly_layout(
+                    height=190,
+                    x_title=None,
+                    y_title=None,
+                    margin=dict(t=8, b=8, l=8, r=16),
+                    xaxis=dict(visible=False, range=[0, max(counts or [1]) * 1.02]),
+                    yaxis=dict(
+                        autorange="reversed",
+                        tickfont=dict(size=11, color=TOKENS["ink_secondary"]),
+                        showgrid=False,
+                        showline=False,
+                    ),
+                )
             )
-        )
-        st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True)
 
-        type_mix = get_type_mix(df)
-        tier_names = {"L": "Economy", "M": "Standard", "H": "Premium"}
-        rows = {
-            "Mean risk score": f"{summary['mean_risk']:.1f}",
-            "95th percentile": f"{summary['p95_risk']:.0f}",
-        }
-        if "actual_failure_rate" in summary:
-            rows["Recorded failure rate"] = f"{summary['actual_failure_rate']:.2f}%"
-            rows["Flagged by model"] = f"{summary['flagged']:,}"
-        for tier, share in sorted(type_mix.items()):
-            rows[f"{tier_names.get(tier, tier)} tier"] = f"{share:.1f}%"
+            type_mix = get_type_mix(df)
+            tier_names = {"L": "Economy", "M": "Standard", "H": "Premium"}
+            rows = {
+                "Mean risk score": f"{summary['mean_risk']:.1f}",
+                "95th percentile": f"{summary['p95_risk']:.0f}",
+            }
+            if "actual_failure_rate" in summary:
+                rows["Recorded failure rate"] = f"{summary['actual_failure_rate']:.2f}%"
+                rows["Flagged by model"] = f"{summary['flagged']:,}"
+            for tier, share in sorted(type_mix.items()):
+                rows[f"{tier_names.get(tier, tier)} tier"] = f"{share:.1f}%"
 
-        st.markdown(render_kv_rows(rows), unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+            st.markdown(render_kv_rows(rows), unsafe_allow_html=True)
+
 
     # --------------------------------------------------------------- watchlist
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="panel-head"><div class="panel-title">Watchlist</div>'
-        '<div class="panel-note">Highest risk first</div></div>',
-        unsafe_allow_html=True,
-    )
+    with panel('Watchlist', 'Highest risk first'):
 
-    watch_size = st.slider(
-        "Assets to list", min_value=5, max_value=50, value=15, step=5,
-        key="watchlist_size", label_visibility="collapsed",
-    )
-
-    watchlist = scored.nlargest(watch_size, "risk_score")
-
-    if watchlist["risk_score"].max() <= config["risk"]["thresholds"]["low"]:
-        st.markdown(
-            render_notice(
-                "Nothing above routine",
-                "Every asset in the active dataset scores within the routine band. "
-                "The watchlist still shows the highest scores so a trend is visible "
-                "before it crosses a threshold.",
-                "good",
-            ),
-            unsafe_allow_html=True,
+        watch_size = st.slider(
+            "Assets to list", min_value=5, max_value=50, value=15, step=5,
+            key="watchlist_size", label_visibility="collapsed",
         )
 
-    display_cols = {
-        "UDI": "Asset",
-        "Product ID": "Serial",
-        "Type": "Tier",
-        "Air temperature [K]": "Air T (K)",
-        "Process temperature [K]": "Process T (K)",
-        "Rotational speed [rpm]": "Speed (rpm)",
-        "Torque [Nm]": "Torque (Nm)",
-        "Tool wear [min]": "Wear (min)",
-        "risk_score": "Risk",
-        "risk_category": "Band",
-    }
-    present = {k: v for k, v in display_cols.items() if k in watchlist.columns}
-    table = watchlist[list(present)].rename(columns=present)
+        watchlist = scored.nlargest(watch_size, "risk_score")
 
-    st.dataframe(
-        table,
-        use_container_width=True,
-        hide_index=True,
-        height=min(420, 38 + 35 * len(table)),
-        column_config={
-            "Risk": st.column_config.ProgressColumn(
-                "Risk", min_value=0, max_value=100, format="%.0f"
-            ),
-        },
-    )
+        if watchlist["risk_score"].max() <= config["risk"]["thresholds"]["low"]:
+            st.markdown(
+                render_notice(
+                    "Nothing above routine",
+                    "Every asset in the active dataset scores within the routine band. "
+                    "The watchlist still shows the highest scores so a trend is visible "
+                    "before it crosses a threshold.",
+                    "good",
+                ),
+                unsafe_allow_html=True,
+            )
 
-    csv = watchlist[list(present)].rename(columns=present).to_csv(index=False)
-    st.download_button(
-        "Export watchlist",
-        csv,
-        f"watchlist_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-        "text/csv",
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
+        display_cols = {
+            "UDI": "Asset",
+            "Product ID": "Serial",
+            "Type": "Tier",
+            "Air temperature [K]": "Air T (K)",
+            "Process temperature [K]": "Process T (K)",
+            "Rotational speed [rpm]": "Speed (rpm)",
+            "Torque [Nm]": "Torque (Nm)",
+            "Tool wear [min]": "Wear (min)",
+            "risk_score": "Risk",
+            "risk_category": "Band",
+        }
+        present = {k: v for k, v in display_cols.items() if k in watchlist.columns}
+        table = watchlist[list(present)].rename(columns=present)
+
+        st.dataframe(
+            table,
+            use_container_width=True,
+            hide_index=True,
+            height=min(420, 38 + 35 * len(table)),
+            column_config={
+                "Risk": st.column_config.ProgressColumn(
+                    "Risk", min_value=0, max_value=100, format="%.0f"
+                ),
+            },
+        )
+
+        csv = watchlist[list(present)].rename(columns=present).to_csv(index=False)
+        st.download_button(
+            "Export watchlist",
+            csv,
+            f"watchlist_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+            "text/csv",
+        )
+
 
     st.markdown(
         render_footer(

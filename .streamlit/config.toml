@@ -1,0 +1,22 @@
+# Streamlit theme.
+#
+# The stylesheet in app/components/styles.py cannot reach chrome Streamlit
+# renders outside the app container — dialogs, popovers, the dataframe grid and
+# the file uploader among them. Declaring the theme here makes those inherit the
+# same palette instead of falling back to Streamlit's light default.
+#
+# Values mirror TOKENS in app/components/styles.py. Change both together.
+
+[theme]
+base = "dark"
+primaryColor = "#3987e5"
+backgroundColor = "#0e1217"
+secondaryBackgroundColor = "#151a21"
+textColor = "#e8eaed"
+font = "sans serif"
+
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false

@@ -17,7 +17,8 @@ Contents
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from contextlib import contextmanager
+from typing import Any, Dict, Iterator, Optional
 
 # ============================================================================
 # Design tokens
@@ -293,6 +294,21 @@ def get_custom_css() -> str:
     .stat-tile.is-critical .stat-value {{ color: var(--critical); }}
 
     /* --------------------------------------------------------------- panel */
+
+    /* st.container(border=True) — the real grouping primitive. */
+    div[data-testid="stVerticalBlockBorderWrapper"] {{
+        background: var(--surface);
+        border: 1px solid var(--border) !important;
+        border-radius: var(--radius-lg) !important;
+        padding: 14px 16px 4px 16px;
+    }}
+
+    /* Nested containers stay flat so panels do not stack borders. */
+    div[data-testid="stVerticalBlockBorderWrapper"]
+        div[data-testid="stVerticalBlockBorderWrapper"] {{
+        background: transparent;
+        border-color: var(--border) !important;
+    }}
 
     .panel {{
         background: var(--surface);
@@ -587,6 +603,32 @@ def _status(value: str) -> str:
     """Normalise an arbitrary status string to a known token key."""
     key = (value or "neutral").strip().lower()
     return key if key in _VALID_STATUS else "neutral"
+
+
+@contextmanager
+def panel(title: str = "", note: str = "") -> Iterator[Any]:
+    """Group elements inside a bordered panel.
+
+    Streamlit renders every ``st.markdown`` call into its own isolated element,
+    so emitting a bare ``<div class="panel">`` before a block and ``</div>``
+    after it does not wrap anything — it just paints two empty boxes. A real
+    container is the only way to group, so this wraps ``st.container(border=True)``
+    and styles it through ``[data-testid="stVerticalBlockBorderWrapper"]``.
+
+    Args:
+        title: Optional uppercase panel heading.
+        note: Optional right-aligned caption beside the heading.
+
+    Yields:
+        The Streamlit container, so callers can use it directly if needed.
+    """
+    import streamlit as st
+
+    container = st.container(border=True)
+    with container:
+        if title:
+            st.markdown(render_panel_head(title, note), unsafe_allow_html=True)
+        yield container
 
 
 def render_stat_tile(

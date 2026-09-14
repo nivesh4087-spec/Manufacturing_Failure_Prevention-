@@ -35,7 +35,8 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-from app.components.styles import (  # noqa: E402  (must follow set_page_config)
+from app.components.styles import (
+    panel,  # noqa: E402  (must follow set_page_config)
     get_custom_css,
     render_footer,
     render_kv_rows,
@@ -129,10 +130,10 @@ def init_session_state() -> None:
     if "current_page" not in st.session_state:
         st.session_state.current_page = next(iter(PAGES))
 
-    # Show the guide once per browser session, not on every rerun.
-    if "guide_seen" not in st.session_state:
-        st.session_state.guide_seen = True
-        st.session_state.show_guide = True
+    # The guide is opt-in from the sidebar. Auto-opening a modal over the
+    # dashboard on every fresh session gets dismissed unread and puts a click
+    # between the user and their data.
+    st.session_state.setdefault("show_guide", False)
 
 
 init_session_state()
@@ -160,56 +161,48 @@ def render_cold_start() -> None:
     left, right = st.columns(2, gap="large")
 
     with left:
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="panel-title">Option A — baseline, about 30 seconds</div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            "Trains Random Forest and HistGradientBoosting with fixed "
-            "hyperparameters, calibrates the better of the two, and writes the "
-            "same artifacts the full pipeline produces. Good enough to explore "
-            "every page."
-        )
+        with panel('Option A — baseline, about 30 seconds'):
+            st.markdown(
+                "Trains Random Forest and HistGradientBoosting with fixed "
+                "hyperparameters, calibrates the better of the two, and writes the "
+                "same artifacts the full pipeline produces. Good enough to explore "
+                "every page."
+            )
 
-        if st.button("Train baseline model", type="primary", use_container_width=True):
-            status = st.status("Starting...", expanded=True)
-            try:
-                from src.models.baseline import train_baseline
+            if st.button("Train baseline model", type="primary", use_container_width=True):
+                status = st.status("Starting...", expanded=True)
+                try:
+                    from src.models.baseline import train_baseline
 
-                config = load_config_only()
-                summary = train_baseline(
-                    config,
-                    project_root,
-                    progress=lambda message: status.write(message),
-                )
-                status.update(
-                    label=f"Done in {summary['elapsed_seconds']}s — "
-                    f"best model: {summary['best_model_name']}",
-                    state="complete",
-                )
-                load_artifacts.clear()
-                st.rerun()
-            except Exception as exc:  # surfaced to the user, not swallowed
-                status.update(label="Training failed", state="error")
-                st.error(f"{type(exc).__name__}: {exc}")
-        st.markdown("</div>", unsafe_allow_html=True)
+                    config = load_config_only()
+                    summary = train_baseline(
+                        config,
+                        project_root,
+                        progress=lambda message: status.write(message),
+                    )
+                    status.update(
+                        label=f"Done in {summary['elapsed_seconds']}s — "
+                        f"best model: {summary['best_model_name']}",
+                        state="complete",
+                    )
+                    load_artifacts.clear()
+                    st.rerun()
+                except Exception as exc:  # surfaced to the user, not swallowed
+                    status.update(label="Training failed", state="error")
+                    st.error(f"{type(exc).__name__}: {exc}")
+
 
     with right:
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="panel-title">Option B — full pipeline, 10 to 20 minutes</div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            "Randomised hyperparameter search across every enabled model family, "
-            "probability calibration, SHAP analysis, ablation study and the full "
-            "figure set. Run it in a terminal:"
-        )
-        st.code("python scripts/train_pipeline.py --mode full", language="bash")
-        st.markdown("Or the quicker searched profile:")
-        st.code("python scripts/train_pipeline.py --mode fast", language="bash")
-        st.markdown("</div>", unsafe_allow_html=True)
+        with panel('Option B — full pipeline, 10 to 20 minutes'):
+            st.markdown(
+                "Randomised hyperparameter search across every enabled model family, "
+                "probability calibration, SHAP analysis, ablation study and the full "
+                "figure set. Run it in a terminal:"
+            )
+            st.code("python scripts/train_pipeline.py --mode full", language="bash")
+            st.markdown("Or the quicker searched profile:")
+            st.code("python scripts/train_pipeline.py --mode fast", language="bash")
+
 
 
 # ============================================================================

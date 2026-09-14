@@ -17,6 +17,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from app.components.styles import (
+    panel,
     TOKENS,
     plotly_layout,
     render_footer,
@@ -112,169 +113,151 @@ def render_page(project_root: Path) -> None:
     left, right = st.columns([2, 3], gap="medium")
 
     with left:
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="panel-head"><div class="panel-title">By band</div></div>',
-            unsafe_allow_html=True,
-        )
-        counts = [risk_dist.get(band, 0) for band, _ in BANDS]
-        fig = go.Figure(
-            go.Bar(
-                x=counts,
-                y=[band.replace(" RISK", "").title() for band, _ in BANDS],
-                orientation="h",
-                marker_color=[TOKENS[status] for _, status in BANDS],
-                marker_line_width=0,
-                text=[str(c) for c in counts],
-                textposition="outside",
-                textfont=dict(size=11, color=TOKENS["ink_secondary"]),
-                hovertemplate="%{y}: %{x} assessments<extra></extra>",
+        with panel('By band'):
+            counts = [risk_dist.get(band, 0) for band, _ in BANDS]
+            fig = go.Figure(
+                go.Bar(
+                    x=counts,
+                    y=[band.replace(" RISK", "").title() for band, _ in BANDS],
+                    orientation="h",
+                    marker_color=[TOKENS[status] for _, status in BANDS],
+                    marker_line_width=0,
+                    text=[str(c) for c in counts],
+                    textposition="auto",
+                    textfont=dict(size=11, color=TOKENS["ink_secondary"]),
+                    hovertemplate="%{y}: %{x} assessments<extra></extra>",
+                )
             )
-        )
-        fig.update_layout(
-            **plotly_layout(
-                height=190,
-                margin=dict(t=8, b=8, l=8, r=44),
-                xaxis=dict(visible=False),
-                yaxis=dict(
-                    autorange="reversed", showgrid=False, showline=False,
-                    tickfont=dict(size=11, color=TOKENS["ink_secondary"]),
-                ),
+            fig.update_layout(
+                **plotly_layout(
+                    height=190,
+                    margin=dict(t=8, b=8, l=8, r=16),
+                    xaxis=dict(visible=False, range=[0, max(counts or [1]) * 1.02]),
+                    yaxis=dict(
+                        autorange="reversed", showgrid=False, showline=False,
+                        tickfont=dict(size=11, color=TOKENS["ink_secondary"]),
+                    ),
+                )
             )
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+            st.plotly_chart(fig, use_container_width=True)
+
 
     with right:
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="panel-head"><div class="panel-title">Alert feed</div>'
-            '<div class="panel-note">Most recent first</div></div>',
-            unsafe_allow_html=True,
-        )
+        with panel('Alert feed', 'Most recent first'):
 
-        alerts = history_df[
-            history_df["risk_category"].isin(["HIGH RISK", "CRITICAL RISK"])
-        ].sort_values("id", ascending=False).head(8)
+            alerts = history_df[
+                history_df["risk_category"].isin(["HIGH RISK", "CRITICAL RISK"])
+            ].sort_values("id", ascending=False).head(8)
 
-        if alerts.empty:
-            st.markdown(
-                render_notice(
-                    "No alerts raised",
-                    "Every assessment this session landed in the routine or "
-                    "moderate band.",
-                    "good",
-                ),
-                unsafe_allow_html=True,
-            )
-        else:
-            for _, row in alerts.iterrows():
-                status = "critical" if row["risk_category"] == "CRITICAL RISK" else "serious"
+            if alerts.empty:
                 st.markdown(
-                    f'<div class="action action-{"critical" if status == "critical" else "high"}">'
-                    f'<div class="action-head">'
-                    f'<span class="action-title">Assessment #{int(row["id"])} &mdash; '
-                    f'risk {row["risk_score"]:.0f}</span>'
-                    f'{render_pill(row["risk_category"].replace(" RISK", ""), status)}</div>'
-                    f'<div class="action-trigger">{row["timestamp"]} &middot; '
-                    f'failure probability {row["failure_probability"]:.1f}% &middot; '
-                    f'driven by <code>{row["top_factor"]}</code></div>'
-                    f'<div class="action-context">{row["recommendation"]}</div>'
-                    f"</div>",
+                    render_notice(
+                        "No alerts raised",
+                        "Every assessment this session landed in the routine or "
+                        "moderate band.",
+                        "good",
+                    ),
                     unsafe_allow_html=True,
                 )
-        st.markdown("</div>", unsafe_allow_html=True)
+            else:
+                for _, row in alerts.iterrows():
+                    status = "critical" if row["risk_category"] == "CRITICAL RISK" else "serious"
+                    st.markdown(
+                        f'<div class="action action-{"critical" if status == "critical" else "high"}">'
+                        f'<div class="action-head">'
+                        f'<span class="action-title">Assessment #{int(row["id"])} &mdash; '
+                        f'risk {row["risk_score"]:.0f}</span>'
+                        f'{render_pill(row["risk_category"].replace(" RISK", ""), status)}</div>'
+                        f'<div class="action-trigger">{row["timestamp"]} &middot; '
+                        f'failure probability {row["failure_probability"]:.1f}% &middot; '
+                        f'driven by <code>{row["top_factor"]}</code></div>'
+                        f'<div class="action-context">{row["recommendation"]}</div>'
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
 
     # ------------------------------------------------------------- timeline
     if len(history_df) > 1:
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="panel-head"><div class="panel-title">Risk over the session</div>'
-            '<div class="panel-note">One point per assessment</div></div>',
-            unsafe_allow_html=True,
-        )
+        with panel('Risk over the session', 'One point per assessment'):
 
-        scores = history_df["risk_score"].tolist()
-        fig = go.Figure()
-        fig.add_trace(
-            go.Scatter(
-                x=list(range(1, len(scores) + 1)),
-                y=scores,
-                mode="lines+markers",
-                line=dict(color=TOKENS["ink_muted"], width=2),
-                marker=dict(
-                    size=9,
-                    color=[_band_color(s) for s in scores],
-                    line=dict(width=2, color=TOKENS["surface"]),
-                ),
-                hovertemplate="Assessment %{x}: risk %{y:.0f}<extra></extra>",
-                name="Risk score",
+            scores = history_df["risk_score"].tolist()
+            fig = go.Figure()
+            fig.add_trace(
+                go.Scatter(
+                    x=list(range(1, len(scores) + 1)),
+                    y=scores,
+                    mode="lines+markers",
+                    line=dict(color=TOKENS["ink_muted"], width=2),
+                    marker=dict(
+                        size=9,
+                        color=[_band_color(s) for s in scores],
+                        line=dict(width=2, color=TOKENS["surface"]),
+                    ),
+                    hovertemplate="Assessment %{x}: risk %{y:.0f}<extra></extra>",
+                    name="Risk score",
+                )
             )
-        )
-        fig.add_hline(
-            y=60,
-            line_dash="dash",
-            line_color=TOKENS["serious"],
-            line_width=1,
-            annotation_text="Warning threshold",
-            annotation_font=dict(size=10, color=TOKENS["serious"]),
-            annotation_position="top left",
-        )
-        fig.update_layout(
-            **plotly_layout(
-                height=280,
-                x_title="Assessment number",
-                y_title="Risk score",
-                yaxis=dict(
-                    range=[0, 105],
-                    gridcolor=TOKENS["grid"],
-                    tickfont=dict(size=11, color=TOKENS["ink_muted"]),
-                    title_font=dict(size=11, color=TOKENS["ink_muted"]),
-                ),
+            fig.add_hline(
+                y=60,
+                line_dash="dash",
+                line_color=TOKENS["serious"],
+                line_width=1,
+                annotation_text="Warning threshold",
+                annotation_font=dict(size=10, color=TOKENS["serious"]),
+                annotation_position="top left",
             )
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+            fig.update_layout(
+                **plotly_layout(
+                    height=280,
+                    x_title="Assessment number",
+                    y_title="Risk score",
+                    yaxis=dict(
+                        range=[0, 105],
+                        gridcolor=TOKENS["grid"],
+                        tickfont=dict(size=11, color=TOKENS["ink_muted"]),
+                        title_font=dict(size=11, color=TOKENS["ink_muted"]),
+                    ),
+                )
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
 
     # -------------------------------------------------------------- log table
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="panel-head"><div class="panel-title">Full log</div></div>',
-        unsafe_allow_html=True,
-    )
+    with panel('Full log'):
 
-    columns = {
-        "id": "#",
-        "timestamp": "Time",
-        "risk_score": "Risk",
-        "failure_probability": "Probability %",
-        "risk_category": "Band",
-        "prediction": "Call",
-        "top_factor": "Top factor",
-        "recommendation": "Recommendation",
-    }
-    present = {k: v for k, v in columns.items() if k in history_df.columns}
-    table = history_df[list(present)].rename(columns=present).sort_values("#", ascending=False)
+        columns = {
+            "id": "#",
+            "timestamp": "Time",
+            "risk_score": "Risk",
+            "failure_probability": "Probability %",
+            "risk_category": "Band",
+            "prediction": "Call",
+            "top_factor": "Top factor",
+            "recommendation": "Recommendation",
+        }
+        present = {k: v for k, v in columns.items() if k in history_df.columns}
+        table = history_df[list(present)].rename(columns=present).sort_values("#", ascending=False)
 
-    st.dataframe(
-        table,
-        use_container_width=True,
-        hide_index=True,
-        height=min(420, 40 + 35 * len(table)),
-        column_config={
-            "Risk": st.column_config.ProgressColumn(
-                "Risk", min_value=0, max_value=100, format="%.0f"
-            ),
-        },
-    )
+        st.dataframe(
+            table,
+            use_container_width=True,
+            hide_index=True,
+            height=min(420, 40 + 35 * len(table)),
+            column_config={
+                "Risk": st.column_config.ProgressColumn(
+                    "Risk", min_value=0, max_value=100, format="%.0f"
+                ),
+            },
+        )
 
-    st.download_button(
-        "Export session log",
-        history_df.to_csv(index=False),
-        f"assessment_log_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-        "text/csv",
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
+        st.download_button(
+            "Export session log",
+            history_df.to_csv(index=False),
+            f"assessment_log_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+            "text/csv",
+        )
+
 
     st.markdown(
         render_footer(

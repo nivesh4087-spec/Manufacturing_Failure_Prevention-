@@ -20,6 +20,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from app.components.styles import (
+    panel,
     SERIES,
     TOKENS,
     plotly_layout,
@@ -183,121 +184,113 @@ def render_page(project_root: Path, load_artifacts_fn, load_raw_dataset_fn=None)
 
 def _render_source_picker(config, load_raw_dataset_fn) -> None:
     """Render the file / database / sample source tabs."""
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="panel-head"><div class="panel-title">Data source</div></div>',
-        unsafe_allow_html=True,
-    )
+    with panel('Data source'):
 
-    tab_file, tab_db, tab_sample = st.tabs(["File", "Database", "Bundled sample"])
+        tab_file, tab_db, tab_sample = st.tabs(["File", "Database", "Bundled sample"])
 
-    with tab_file:
-        st.caption("CSV or Excel. Headers are matched automatically where possible.")
-        st.download_button(
-            "Download a template",
-            _template_csv(config),
-            "telemetry_template.csv",
-            "text/csv",
-            help="A correctly shaped file you can fill in.",
-        )
-        uploaded = st.file_uploader(
-            "Telemetry file", type=["csv", "xlsx", "xls"], key="batch_uploader",
-            label_visibility="collapsed",
-        )
-        if uploaded is not None:
-            try:
-                frame = (
-                    pd.read_excel(uploaded)
-                    if uploaded.name.endswith((".xlsx", ".xls"))
-                    else pd.read_csv(uploaded)
-                )
-                st.session_state["uploaded_dataset"] = frame
-                st.session_state["uploaded_filename"] = uploaded.name
-                st.session_state.pop("batch_results", None)
-                st.success(f"Loaded {len(frame):,} rows from {uploaded.name}.")
-            except Exception as exc:
-                st.error(f"Could not read the file — {type(exc).__name__}: {exc}")
-
-    with tab_db:
-        st.caption("Pull telemetry straight from a plant historian or warehouse.")
-        c1, c2 = st.columns([1, 2])
-        with c1:
-            db_type = st.selectbox(
-                "Engine",
-                ["PostgreSQL", "MySQL", "SQLite", "MongoDB", "Snowflake", "Oracle",
-                 "Microsoft SQL Server"],
-                key="batch_db_type",
+        with tab_file:
+            st.caption("CSV or Excel. Headers are matched automatically where possible.")
+            st.download_button(
+                "Download a template",
+                _template_csv(config),
+                "telemetry_template.csv",
+                "text/csv",
+                help="A correctly shaped file you can fill in.",
             )
-        with c2:
-            conn_str = st.text_input(
-                "Connection URI",
-                placeholder="postgresql://user:password@host:5432/plant",
-                key="batch_conn_str",
+            uploaded = st.file_uploader(
+                "Telemetry file", type=["csv", "xlsx", "xls"], key="batch_uploader",
+                label_visibility="collapsed",
             )
-        query_str = st.text_input(
-            "Table or query", value="SELECT * FROM equipment_telemetry LIMIT 1000",
-            key="batch_query_str",
-        )
-        if st.button("Connect and import", key="batch_db_btn"):
-            if not conn_str.strip():
-                st.warning("Enter a connection URI first.")
-            else:
+            if uploaded is not None:
                 try:
-                    from src.data.loader import load_from_database
-
-                    frame = load_from_database(db_type, conn_str, query_str)
+                    frame = (
+                        pd.read_excel(uploaded)
+                        if uploaded.name.endswith((".xlsx", ".xls"))
+                        else pd.read_csv(uploaded)
+                    )
                     st.session_state["uploaded_dataset"] = frame
-                    st.session_state["uploaded_filename"] = f"{db_type} query"
+                    st.session_state["uploaded_filename"] = uploaded.name
                     st.session_state.pop("batch_results", None)
-                    st.success(f"Imported {len(frame):,} rows.")
-                    st.rerun()
+                    st.success(f"Loaded {len(frame):,} rows from {uploaded.name}.")
                 except Exception as exc:
-                    st.error(f"{type(exc).__name__}: {exc}")
+                    st.error(f"Could not read the file — {type(exc).__name__}: {exc}")
 
-    with tab_sample:
-        st.caption("Load a slice of the bundled plant telemetry to try the workflow.")
-        size = st.select_slider(
-            "Rows", options=[100, 500, 1000, 2500, 5000], value=1000, key="batch_sample_size"
-        )
-        if st.button("Load sample", key="batch_sample_btn"):
-            if load_raw_dataset_fn is None:
-                st.warning("No bundled dataset is available.")
-            else:
-                frame = load_raw_dataset_fn().head(size).copy()
-                st.session_state["uploaded_dataset"] = frame
-                st.session_state["uploaded_filename"] = f"bundled sample ({size:,} rows)"
-                st.session_state.pop("batch_results", None)
-                st.rerun()
+        with tab_db:
+            st.caption("Pull telemetry straight from a plant historian or warehouse.")
+            c1, c2 = st.columns([1, 2])
+            with c1:
+                db_type = st.selectbox(
+                    "Engine",
+                    ["PostgreSQL", "MySQL", "SQLite", "MongoDB", "Snowflake", "Oracle",
+                     "Microsoft SQL Server"],
+                    key="batch_db_type",
+                )
+            with c2:
+                conn_str = st.text_input(
+                    "Connection URI",
+                    placeholder="postgresql://user:password@host:5432/plant",
+                    key="batch_conn_str",
+                )
+            query_str = st.text_input(
+                "Table or query", value="SELECT * FROM equipment_telemetry LIMIT 1000",
+                key="batch_query_str",
+            )
+            if st.button("Connect and import", key="batch_db_btn"):
+                if not conn_str.strip():
+                    st.warning("Enter a connection URI first.")
+                else:
+                    try:
+                        from src.data.loader import load_from_database
 
-    st.markdown("</div>", unsafe_allow_html=True)
+                        frame = load_from_database(db_type, conn_str, query_str)
+                        st.session_state["uploaded_dataset"] = frame
+                        st.session_state["uploaded_filename"] = f"{db_type} query"
+                        st.session_state.pop("batch_results", None)
+                        st.success(f"Imported {len(frame):,} rows.")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"{type(exc).__name__}: {exc}")
+
+        with tab_sample:
+            st.caption("Load a slice of the bundled plant telemetry to try the workflow.")
+            size = st.select_slider(
+                "Rows", options=[100, 500, 1000, 2500, 5000], value=1000, key="batch_sample_size"
+            )
+            if st.button("Load sample", key="batch_sample_btn"):
+                if load_raw_dataset_fn is None:
+                    st.warning("No bundled dataset is available.")
+                else:
+                    frame = load_raw_dataset_fn().head(size).copy()
+                    st.session_state["uploaded_dataset"] = frame
+                    st.session_state["uploaded_filename"] = f"bundled sample ({size:,} rows)"
+                    st.session_state.pop("batch_results", None)
+                    st.rerun()
+
+
 
 
 def _render_schema_help(_config) -> None:
     """Explain the expected schema when nothing has been loaded yet."""
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="panel-head"><div class="panel-title">What the file needs</div></div>',
-        unsafe_allow_html=True,
-    )
-    left, right = st.columns(2)
-    with left:
-        st.markdown("**Required**")
-        for internal, label in REQUIRED_COLUMNS.items():
-            st.markdown(render_validation_item(f"{label} — <code>{internal}</code>", True),
-                        unsafe_allow_html=True)
-    with right:
-        st.markdown("**Optional**")
-        for internal, label in OPTIONAL_COLUMNS.items():
-            st.markdown(render_validation_item(f"{label} — <code>{internal}</code>", False),
-                        unsafe_allow_html=True)
-        st.markdown(
-            '<div style="font-size:0.78rem; color:var(--ink-muted); margin-top:10px;">'
-            "Headers carrying units, such as <code>Air temperature [K]</code>, are "
-            "recognised automatically. Anything unmatched can be mapped by hand "
-            "after loading.</div>",
-            unsafe_allow_html=True,
-        )
-    st.markdown("</div>", unsafe_allow_html=True)
+    with panel('What the file needs'):
+        left, right = st.columns(2)
+        with left:
+            st.markdown("**Required**")
+            for internal, label in REQUIRED_COLUMNS.items():
+                st.markdown(render_validation_item(f"{label} — <code>{internal}</code>", True),
+                            unsafe_allow_html=True)
+        with right:
+            st.markdown("**Optional**")
+            for internal, label in OPTIONAL_COLUMNS.items():
+                st.markdown(render_validation_item(f"{label} — <code>{internal}</code>", False),
+                            unsafe_allow_html=True)
+            st.markdown(
+                '<div style="font-size:0.78rem; color:var(--ink-muted); margin-top:10px;">'
+                "Headers carrying units, such as <code>Air temperature [K]</code>, are "
+                "recognised automatically. Anything unmatched can be mapped by hand "
+                "after loading.</div>",
+                unsafe_allow_html=True,
+            )
+
 
 
 # ============================================================================
@@ -339,60 +332,55 @@ def _render_file_summary(df: pd.DataFrame, filename: str) -> None:
 
 def _render_mapping(df: pd.DataFrame) -> Dict[str, str]:
     """Render auto-detected mapping plus manual fallbacks. Returns the mapping."""
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="panel-head"><div class="panel-title">Column mapping</div>'
-        '<div class="panel-note">Matched against known header spellings</div></div>',
-        unsafe_allow_html=True,
-    )
+    with panel('Column mapping', 'Matched against known header spellings'):
 
-    auto = auto_map_columns(list(df.columns))
-    mapping = dict(auto)
+        auto = auto_map_columns(list(df.columns))
+        mapping = dict(auto)
 
-    left, right = st.columns([3, 2], gap="medium")
-    with left:
-        for internal, label in {**REQUIRED_COLUMNS, **OPTIONAL_COLUMNS}.items():
-            if internal in auto:
-                st.markdown(
-                    render_validation_item(f"{label} &rarr; <code>{auto[internal]}</code>", True),
-                    unsafe_allow_html=True,
-                )
-            else:
-                required = internal in REQUIRED_COLUMNS
-                st.markdown(
-                    render_validation_item(
-                        f"{label} — not found"
-                        + ("" if required else " (a default will be used)"),
-                        not required,
-                    ),
-                    unsafe_allow_html=True,
-                )
-    with right:
-        st.dataframe(df.head(5), use_container_width=True, hide_index=True, height=190)
+        left, right = st.columns([3, 2], gap="medium")
+        with left:
+            for internal, label in {**REQUIRED_COLUMNS, **OPTIONAL_COLUMNS}.items():
+                if internal in auto:
+                    st.markdown(
+                        render_validation_item(f"{label} &rarr; <code>{auto[internal]}</code>", True),
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    required = internal in REQUIRED_COLUMNS
+                    st.markdown(
+                        render_validation_item(
+                            f"{label} — not found"
+                            + ("" if required else " (a default will be used)"),
+                            not required,
+                        ),
+                        unsafe_allow_html=True,
+                    )
+        with right:
+            st.dataframe(df.head(5), use_container_width=True, hide_index=True, height=190)
 
-    unmapped = [k for k in REQUIRED_COLUMNS if k not in mapping]
-    if unmapped:
-        st.markdown(
-            '<div style="margin-top:12px;" class="panel-title">Map the rest by hand</div>',
-            unsafe_allow_html=True,
-        )
-        options = ["— not available —"] + list(df.columns)
-        cols = st.columns(min(3, len(unmapped)))
-        for i, internal in enumerate(unmapped):
-            with cols[i % len(cols)]:
-                chosen = st.selectbox(
-                    REQUIRED_COLUMNS[internal], options, key=f"map_{internal}"
-                )
-                if chosen != options[0]:
-                    mapping[internal] = chosen
+        unmapped = [k for k in REQUIRED_COLUMNS if k not in mapping]
+        if unmapped:
+            st.markdown(
+                '<div style="margin-top:12px;" class="panel-title">Map the rest by hand</div>',
+                unsafe_allow_html=True,
+            )
+            options = ["— not available —"] + list(df.columns)
+            cols = st.columns(min(3, len(unmapped)))
+            for i, internal in enumerate(unmapped):
+                with cols[i % len(cols)]:
+                    chosen = st.selectbox(
+                        REQUIRED_COLUMNS[internal], options, key=f"map_{internal}"
+                    )
+                    if chosen != options[0]:
+                        mapping[internal] = chosen
 
-    if "type" not in mapping:
-        options = ["— not available —"] + list(df.columns)
-        chosen = st.selectbox(OPTIONAL_COLUMNS["type"], options, key="map_type")
-        if chosen != options[0]:
-            mapping["type"] = chosen
+        if "type" not in mapping:
+            options = ["— not available —"] + list(df.columns)
+            chosen = st.selectbox(OPTIONAL_COLUMNS["type"], options, key="map_type")
+            if chosen != options[0]:
+                mapping["type"] = chosen
 
-    st.markdown("</div>", unsafe_allow_html=True)
+
     return mapping
 
 
@@ -517,90 +505,77 @@ def _render_results(df: pd.DataFrame, results: pd.DataFrame, config, best_name: 
     left, right = st.columns(2, gap="medium")
 
     with left:
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="panel-head"><div class="panel-title">Risk bands</div></div>',
-            unsafe_allow_html=True,
-        )
-        counts = valid["risk_category"].value_counts()
-        values = [int(counts.get(band, 0)) for band, _ in BANDS]
-        fig = go.Figure(
-            go.Bar(
-                x=values,
-                y=[band.replace(" RISK", "").title() for band, _ in BANDS],
-                orientation="h",
-                marker_color=[TOKENS[status] for _, status in BANDS],
-                marker_line_width=0,
-                text=[f"{v:,}" for v in values],
-                textposition="outside",
-                textfont=dict(size=11, color=TOKENS["ink_secondary"]),
-                hovertemplate="%{y}: %{x:,} assets<extra></extra>",
+        with panel('Risk bands'):
+            counts = valid["risk_category"].value_counts()
+            values = [int(counts.get(band, 0)) for band, _ in BANDS]
+            fig = go.Figure(
+                go.Bar(
+                    x=values,
+                    y=[band.replace(" RISK", "").title() for band, _ in BANDS],
+                    orientation="h",
+                    marker_color=[TOKENS[status] for _, status in BANDS],
+                    marker_line_width=0,
+                    text=[f"{v:,}" for v in values],
+                    textposition="auto",
+                    textfont=dict(size=11, color=TOKENS["ink_secondary"]),
+                    hovertemplate="%{y}: %{x:,} assets<extra></extra>",
+                )
             )
-        )
-        fig.update_layout(
-            **plotly_layout(
-                height=230,
-                margin=dict(t=8, b=8, l=8, r=48),
-                xaxis=dict(visible=False),
-                yaxis=dict(autorange="reversed", showgrid=False, showline=False,
-                           tickfont=dict(size=11, color=TOKENS["ink_secondary"])),
+            fig.update_layout(
+                **plotly_layout(
+                    height=230,
+                    margin=dict(t=8, b=8, l=8, r=16),
+                    xaxis=dict(visible=False, range=[0, max(values or [1]) * 1.02]),
+                    yaxis=dict(autorange="reversed", showgrid=False, showline=False,
+                               tickfont=dict(size=11, color=TOKENS["ink_secondary"])),
+                )
             )
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+            st.plotly_chart(fig, use_container_width=True)
+
 
     with right:
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="panel-head"><div class="panel-title">Score distribution</div></div>',
-            unsafe_allow_html=True,
-        )
-        fig = go.Figure(
-            go.Histogram(
-                x=valid["risk_score"], nbinsx=25,
-                marker_color=SERIES[0], marker_line_width=0,
-                hovertemplate="Risk %{x}<br>%{y} assets<extra></extra>",
+        with panel('Score distribution'):
+            fig = go.Figure(
+                go.Histogram(
+                    x=valid["risk_score"], nbinsx=25,
+                    marker_color=SERIES[0], marker_line_width=0,
+                    hovertemplate="Risk %{x}<br>%{y} assets<extra></extra>",
+                )
             )
-        )
-        fig.add_vline(
-            x=config["early_warning"]["threshold"], line_dash="dash",
-            line_color=TOKENS["serious"], line_width=1,
-            annotation_text="Alert threshold",
-            annotation_font=dict(size=10, color=TOKENS["serious"]),
-        )
-        fig.update_layout(
-            **plotly_layout(height=230, x_title="Risk score", y_title="Assets", bargap=0.04)
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+            fig.add_vline(
+                x=config["early_warning"]["threshold"], line_dash="dash",
+                line_color=TOKENS["serious"], line_width=1,
+                annotation_text="Alert threshold",
+                annotation_font=dict(size=10, color=TOKENS["serious"]),
+            )
+            fig.update_layout(
+                **plotly_layout(height=230, x_title="Risk score", y_title="Assets", bargap=0.04)
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
 
     # ------------------------------------------------------------ table
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="panel-head"><div class="panel-title">Results</div>'
-        '<div class="panel-note">Highest risk first</div></div>',
-        unsafe_allow_html=True,
-    )
+    with panel('Results', 'Highest risk first'):
 
-    table = results.copy()
-    table.insert(0, "Row", table.index)
-    table["failure_probability"] = (table["failure_probability"] * 100).round(2)
-    table = table.rename(
-        columns={
-            "prediction": "Call",
-            "failure_probability": "Probability %",
-            "risk_score": "Risk",
-            "risk_category": "Band",
-        }
-    ).sort_values("Risk", ascending=False)
+        table = results.copy()
+        table.insert(0, "Row", table.index)
+        table["failure_probability"] = (table["failure_probability"] * 100).round(2)
+        table = table.rename(
+            columns={
+                "prediction": "Call",
+                "failure_probability": "Probability %",
+                "risk_score": "Risk",
+                "risk_category": "Band",
+            }
+        ).sort_values("Risk", ascending=False)
 
-    st.dataframe(
-        table, use_container_width=True, hide_index=True, height=380,
-        column_config={
-            "Risk": st.column_config.ProgressColumn("Risk", min_value=0, max_value=100, format="%.0f")
-        },
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
+        st.dataframe(
+            table, use_container_width=True, hide_index=True, height=380,
+            column_config={
+                "Risk": st.column_config.ProgressColumn("Risk", min_value=0, max_value=100, format="%.0f")
+            },
+        )
+
 
     # ------------------------------------------------------------ export
     export = pd.concat(

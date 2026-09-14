@@ -54,8 +54,8 @@ models/*.json
 reports/results/*.json
 reports/results/*.csv
 
-# Streamlit
-.streamlit/
+# Streamlit — the theme config is part of the project; secrets are not
+.streamlit/secrets.toml
 
 # Temp files
 *.tmp

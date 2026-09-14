@@ -19,6 +19,7 @@ import streamlit as st
 
 from app.components.data_access import active_dataset
 from app.components.styles import (
+    panel,
     SERIES,
     TOKENS,
     plotly_layout,
@@ -123,56 +124,51 @@ def _render_global(artifacts: Dict[str, Any], config: Dict[str, Any], load_resul
         )
 
     st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="panel-head"><div class="panel-title">Mean absolute SHAP value</div>'
-        '<div class="panel-note">Higher means the feature moves predictions more</div></div>',
-        unsafe_allow_html=True,
-    )
+    with panel('Mean absolute SHAP value', 'Higher means the feature moves predictions more'):
 
-    fig = go.Figure(
-        go.Bar(
-            y=top["label"],
-            x=top["mean_abs_shap"],
-            orientation="h",
-            marker_color=SERIES[0],
-            marker_line_width=0,
-            customdata=top[["feature", "contribution_pct"]].values,
-            hovertemplate="%{customdata[0]}<br>Mean |SHAP| %{x:.4f}<br>"
-            "%{customdata[1]:.1f}% of total<extra></extra>",
+        fig = go.Figure(
+            go.Bar(
+                y=top["label"],
+                x=top["mean_abs_shap"],
+                orientation="h",
+                marker_color=SERIES[0],
+                marker_line_width=0,
+                customdata=top[["feature", "contribution_pct"]].values,
+                hovertemplate="%{customdata[0]}<br>Mean |SHAP| %{x:.4f}<br>"
+                "%{customdata[1]:.1f}% of total<extra></extra>",
+            )
         )
-    )
-    fig.update_layout(
-        **plotly_layout(
-            height=52 + 30 * len(top),
-            x_title="Mean |SHAP value|",
-            margin=dict(t=8, b=42, l=8, r=20),
-            yaxis=dict(
-                autorange="reversed",
-                tickfont=dict(size=11, color=TOKENS["ink_secondary"]),
-                showgrid=False,
-                showline=False,
-                automargin=True,
-            ),
+        fig.update_layout(
+            **plotly_layout(
+                height=52 + 30 * len(top),
+                x_title="Mean |SHAP value|",
+                margin=dict(t=8, b=42, l=8, r=20),
+                yaxis=dict(
+                    autorange="reversed",
+                    tickfont=dict(size=11, color=TOKENS["ink_secondary"]),
+                    showgrid=False,
+                    showline=False,
+                    automargin=True,
+                ),
+            )
         )
-    )
-    st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True)
 
-    with st.expander("Full ranking as a table"):
-        table = imp_df[["rank", "feature", "mean_abs_shap", "contribution_pct"]].copy()
-        table["station"] = table["feature"].map(lambda f: mapping.get(f, "—"))
-        table.columns = ["Rank", "Feature", "Mean |SHAP|", "Share %", "Station"]
-        st.dataframe(table, use_container_width=True, hide_index=True)
+        with st.expander("Full ranking as a table"):
+            table = imp_df[["rank", "feature", "mean_abs_shap", "contribution_pct"]].copy()
+            table["station"] = table["feature"].map(lambda f: mapping.get(f, "—"))
+            table.columns = ["Rank", "Feature", "Mean |SHAP|", "Share %", "Station"]
+            st.dataframe(table, use_container_width=True, hide_index=True)
 
-    st.markdown(
-        '<div class="disclaimer">SHAP distributes a prediction among its inputs '
-        "using Shapley values from cooperative game theory, so the contributions "
-        "sum to the difference between this prediction and the average one. "
-        "Importance here is influence on the model, which is not the same as "
-        "physical causation.</div>",
-        unsafe_allow_html=True,
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown(
+            '<div class="disclaimer">SHAP distributes a prediction among its inputs '
+            "using Shapley values from cooperative game theory, so the contributions "
+            "sum to the difference between this prediction and the average one. "
+            "Importance here is influence on the model, which is not the same as "
+            "physical causation.</div>",
+            unsafe_allow_html=True,
+        )
+
 
 
 # ============================================================================
@@ -307,60 +303,55 @@ def _render_local(artifacts: Dict[str, Any], config: Dict[str, Any], load_datase
         return
 
     mapping = config.get("industry_mapping", {})
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="panel-head"><div class="panel-title">Contribution breakdown</div>'
-        '<div class="panel-note">Right pushes toward failure, left pushes away</div></div>',
-        unsafe_allow_html=True,
-    )
+    with panel('Contribution breakdown', 'Right pushes toward failure, left pushes away'):
 
-    labels = [mapping.get(f["feature"], f["feature"]) for f in factors]
-    values = [f["shap_value"] for f in factors]
-    fig = go.Figure(
-        go.Bar(
-            y=labels,
-            x=values,
-            orientation="h",
-            marker_color=[TOKENS["critical"] if v > 0 else TOKENS["good"] for v in values],
-            marker_line=dict(width=2, color=TOKENS["surface"]),
-            customdata=[[f["feature"], f["value"]] for f in factors],
-            hovertemplate="%{customdata[0]} = %{customdata[1]:.3f}<br>SHAP %{x:+.4f}<extra></extra>",
+        labels = [mapping.get(f["feature"], f["feature"]) for f in factors]
+        values = [f["shap_value"] for f in factors]
+        fig = go.Figure(
+            go.Bar(
+                y=labels,
+                x=values,
+                orientation="h",
+                marker_color=[TOKENS["critical"] if v > 0 else TOKENS["good"] for v in values],
+                marker_line=dict(width=2, color=TOKENS["surface"]),
+                customdata=[[f["feature"], f["value"]] for f in factors],
+                hovertemplate="%{customdata[0]} = %{customdata[1]:.3f}<br>SHAP %{x:+.4f}<extra></extra>",
+            )
         )
-    )
-    fig.add_vline(x=0, line_width=1, line_color=TOKENS["border_strong"])
-    fig.update_layout(
-        **plotly_layout(
-            height=52 + 32 * len(factors),
-            x_title="SHAP contribution",
-            margin=dict(t=8, b=42, l=8, r=24),
-            yaxis=dict(
-                autorange="reversed",
-                tickfont=dict(size=11, color=TOKENS["ink_secondary"]),
-                showgrid=False,
-                showline=False,
-                automargin=True,
-            ),
+        fig.add_vline(x=0, line_width=1, line_color=TOKENS["border_strong"])
+        fig.update_layout(
+            **plotly_layout(
+                height=52 + 32 * len(factors),
+                x_title="SHAP contribution",
+                margin=dict(t=8, b=42, l=8, r=24),
+                yaxis=dict(
+                    autorange="reversed",
+                    tickfont=dict(size=11, color=TOKENS["ink_secondary"]),
+                    showgrid=False,
+                    showline=False,
+                    automargin=True,
+                ),
+            )
         )
-    )
-    st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown(
-        '<div class="panel-title" style="margin-top:8px;">In plain terms</div>',
-        unsafe_allow_html=True,
-    )
-    for factor in factors[:5]:
-        direction = "raised" if factor["impact"] == "increases risk" else "lowered"
-        station = mapping.get(factor["feature"], factor["feature"])
         st.markdown(
-            f'<div style="font-size:0.82rem; color:var(--ink-secondary); padding:4px 0; '
-            f'border-bottom:1px solid var(--border);">'
-            f'<strong style="color:var(--ink);">{station}</strong> at '
-            f'<code>{factor["value"]:.2f}</code> {direction} the failure estimate '
-            f'<span style="font-variant-numeric:tabular-nums;">'
-            f'({factor["shap_value"]:+.4f})</span></div>',
+            '<div class="panel-title" style="margin-top:8px;">In plain terms</div>',
             unsafe_allow_html=True,
         )
-    st.markdown("</div>", unsafe_allow_html=True)
+        for factor in factors[:5]:
+            direction = "raised" if factor["impact"] == "increases risk" else "lowered"
+            station = mapping.get(factor["feature"], factor["feature"])
+            st.markdown(
+                f'<div style="font-size:0.82rem; color:var(--ink-secondary); padding:4px 0; '
+                f'border-bottom:1px solid var(--border);">'
+                f'<strong style="color:var(--ink);">{station}</strong> at '
+                f'<code>{factor["value"]:.2f}</code> {direction} the failure estimate '
+                f'<span style="font-variant-numeric:tabular-nums;">'
+                f'({factor["shap_value"]:+.4f})</span></div>',
+                unsafe_allow_html=True,
+            )
+
 
 
 # ============================================================================

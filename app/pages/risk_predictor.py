@@ -19,6 +19,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from app.components.styles import (
+    panel,
     TOKENS,
     plotly_layout,
     render_footer,
@@ -93,81 +94,71 @@ def render_page(project_root: Path, load_artifacts_fn, load_dataset_fn) -> None:
     )
 
     # ------------------------------------------------------------- scenarios
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="panel-head"><div class="panel-title">Starting point</div>'
-        '<div class="panel-note">Load a representative operating state, then adjust</div></div>',
-        unsafe_allow_html=True,
-    )
+    with panel('Starting point', 'Load a representative operating state, then adjust'):
 
-    scenarios = config["demo_scenarios"]
-    scenario_cols = st.columns(len(scenarios))
-    for col, (key, scenario) in zip(scenario_cols, scenarios.items()):
-        with col:
-            if st.button(
-                scenario["name"],
-                key=f"scenario_{key}",
-                use_container_width=True,
-                help=scenario["description"],
-            ):
-                _seed_inputs(scenario["values"])
-                st.rerun()
-    st.markdown("</div>", unsafe_allow_html=True)
+        scenarios = config["demo_scenarios"]
+        scenario_cols = st.columns(len(scenarios))
+        for col, (key, scenario) in zip(scenario_cols, scenarios.items()):
+            with col:
+                if st.button(
+                    scenario["name"],
+                    key=f"scenario_{key}",
+                    use_container_width=True,
+                    help=scenario["description"],
+                ):
+                    _seed_inputs(scenario["values"])
+                    st.rerun()
+
 
     # ----------------------------------------------------------------- inputs
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="panel-head"><div class="panel-title">Sensor readings</div>'
-        '<div class="panel-note">Line 1 — stamping and milling</div></div>',
-        unsafe_allow_html=True,
-    )
+    with panel('Sensor readings', 'Line 1 — stamping and milling'):
 
-    col1, col2, col3 = st.columns(3)
+        col1, col2, col3 = st.columns(3)
 
-    with col1:
-        st.number_input(
-            "Air temperature (K)", min_value=290.0, max_value=310.0, step=0.1,
-            key="rp_air_temp", help="Ambient temperature in the press hall.",
-        )
-        st.number_input(
-            "Process temperature (K)", min_value=300.0, max_value=320.0, step=0.1,
-            key="rp_process_temp", help="Spindle and drive housing temperature.",
+        with col1:
+            st.number_input(
+                "Air temperature (K)", min_value=290.0, max_value=310.0, step=0.1,
+                key="rp_air_temp", help="Ambient temperature in the press hall.",
+            )
+            st.number_input(
+                "Process temperature (K)", min_value=300.0, max_value=320.0, step=0.1,
+                key="rp_process_temp", help="Spindle and drive housing temperature.",
+            )
+
+        with col2:
+            st.number_input(
+                "Rotational speed (rpm)", min_value=1000, max_value=3000, step=10,
+                key="rp_rpm", help="Cutting spindle speed.",
+            )
+            st.number_input(
+                "Torque (Nm)", min_value=3.0, max_value=80.0, step=0.5,
+                key="rp_torque", help="Press drive torque during the cut.",
+            )
+
+        with col3:
+            st.number_input(
+                "Tool wear (min)", min_value=0, max_value=260, step=1,
+                key="rp_tool_wear", help="Minutes accumulated on the current punch and die.",
+            )
+            st.selectbox(
+                "Board grade",
+                list(TYPE_LABELS.values()),
+                index=int(st.session_state.get("rp_type", 1)),
+                key="rp_type_label",
+            )
+
+        # The thermal margin is the single most diagnostic derived value, so show it
+        # live rather than making the user wait for a prediction to see it.
+        margin = st.session_state.rp_process_temp - st.session_state.rp_air_temp
+        margin_status = "good" if margin >= 9.5 else ("warning" if margin >= 8.0 else "critical")
+        st.markdown(
+            f'<div style="margin-top:10px; font-size:0.78rem; color:var(--ink-muted);">'
+            f"Thermal margin {margin:.1f} K &nbsp; "
+            f'{render_pill("healthy" if margin_status == "good" else "narrow", margin_status)}'
+            f"</div>",
+            unsafe_allow_html=True,
         )
 
-    with col2:
-        st.number_input(
-            "Rotational speed (rpm)", min_value=1000, max_value=3000, step=10,
-            key="rp_rpm", help="Cutting spindle speed.",
-        )
-        st.number_input(
-            "Torque (Nm)", min_value=3.0, max_value=80.0, step=0.5,
-            key="rp_torque", help="Press drive torque during the cut.",
-        )
-
-    with col3:
-        st.number_input(
-            "Tool wear (min)", min_value=0, max_value=260, step=1,
-            key="rp_tool_wear", help="Minutes accumulated on the current punch and die.",
-        )
-        st.selectbox(
-            "Board grade",
-            list(TYPE_LABELS.values()),
-            index=int(st.session_state.get("rp_type", 1)),
-            key="rp_type_label",
-        )
-
-    # The thermal margin is the single most diagnostic derived value, so show it
-    # live rather than making the user wait for a prediction to see it.
-    margin = st.session_state.rp_process_temp - st.session_state.rp_air_temp
-    margin_status = "good" if margin >= 9.5 else ("warning" if margin >= 8.0 else "critical")
-    st.markdown(
-        f'<div style="margin-top:10px; font-size:0.78rem; color:var(--ink-muted);">'
-        f"Thermal margin {margin:.1f} K &nbsp; "
-        f'{render_pill("healthy" if margin_status == "good" else "narrow", margin_status)}'
-        f"</div>",
-        unsafe_allow_html=True,
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
 
     predict = st.button("Assess failure risk", type="primary", use_container_width=True)
     if not predict:
@@ -274,105 +265,91 @@ def render_page(project_root: Path, load_artifacts_fn, load_dataset_fn) -> None:
     gauge_col, shap_col = st.columns([2, 3], gap="medium")
 
     with gauge_col:
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="panel-head"><div class="panel-title">Risk score</div></div>',
-            unsafe_allow_html=True,
-        )
-        st.plotly_chart(
-            _risk_gauge(risk_score, TOKENS[band_status], config), use_container_width=True
-        )
-        st.markdown(
-            f'<div style="font-size:0.8rem; color:var(--ink-secondary); line-height:1.5;">'
-            f'{risk_assessment["assessment_summary"]}</div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            render_kv_rows(
-                {
-                    "Thermal margin": f"{margin:.1f} K",
-                    "Torque per 1000 rpm": f"{input_data['torque_nm'] / input_data['rotational_speed_rpm'] * 1000:.2f} Nm",
-                    "Tool wear": f"{input_data['tool_wear_min']} min",
-                    "Board grade": TYPE_LABELS[input_data["type"]],
-                }
-            ),
-            unsafe_allow_html=True,
-        )
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    with shap_col:
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="panel-head"><div class="panel-title">What drove this result</div>'
-            '<div class="panel-note">SHAP contribution per feature</div></div>',
-            unsafe_allow_html=True,
-        )
-
-        factors = shap_explanation.get("top_factors", [])[:8]
-        if factors:
-            st.plotly_chart(_shap_chart(factors, config), use_container_width=True)
-            st.caption(
-                "Bars to the right pushed the prediction toward failure; bars to "
-                "the left pushed it away. Length is how hard."
+        with panel('Risk score'):
+            st.plotly_chart(
+                _risk_gauge(risk_score, TOKENS[band_status], config), use_container_width=True
             )
-        elif shap_explanation.get("error"):
             st.markdown(
-                render_notice(
-                    "Explanation unavailable",
-                    f"SHAP could not run for this prediction: "
-                    f"<code>{shap_explanation['error']}</code>",
-                    "warning",
+                f'<div style="font-size:0.8rem; color:var(--ink-secondary); line-height:1.5;">'
+                f'{risk_assessment["assessment_summary"]}</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                render_kv_rows(
+                    {
+                        "Thermal margin": f"{margin:.1f} K",
+                        "Torque per 1000 rpm": f"{input_data['torque_nm'] / input_data['rotational_speed_rpm'] * 1000:.2f} Nm",
+                        "Tool wear": f"{input_data['tool_wear_min']} min",
+                        "Board grade": TYPE_LABELS[input_data["type"]],
+                    }
                 ),
                 unsafe_allow_html=True,
             )
-        else:
-            st.caption("No feature moved this prediction materially.")
-        st.markdown("</div>", unsafe_allow_html=True)
+
+
+    with shap_col:
+        with panel('What drove this result', 'SHAP contribution per feature'):
+
+            factors = shap_explanation.get("top_factors", [])[:8]
+            if factors:
+                st.plotly_chart(_shap_chart(factors, config), use_container_width=True)
+                st.caption(
+                    "Bars to the right pushed the prediction toward failure; bars to "
+                    "the left pushed it away. Length is how hard."
+                )
+            elif shap_explanation.get("error"):
+                st.markdown(
+                    render_notice(
+                        "Explanation unavailable",
+                        f"SHAP could not run for this prediction: "
+                        f"<code>{shap_explanation['error']}</code>",
+                        "warning",
+                    ),
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.caption("No feature moved this prediction materially.")
+
 
     # -------------------------------------------------------------- actions
-    st.markdown('<div class="panel">', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="panel-head"><div class="panel-title">Recommended actions</div>'
-        '<div class="panel-note">Highest priority first</div></div>',
-        unsafe_allow_html=True,
-    )
+    with panel('Recommended actions', 'Highest priority first'):
 
-    if recommendations:
-        for rec in recommendations[:4]:
-            status = PRIORITY_STATUS.get(rec["priority"], "neutral")
-            steps = "".join(f"<li>{step}</li>" for step in rec["recommendations"][:2])
+        if recommendations:
+            for rec in recommendations[:4]:
+                status = PRIORITY_STATUS.get(rec["priority"], "neutral")
+                steps = "".join(f"<li>{step}</li>" for step in rec["recommendations"][:2])
+                st.markdown(
+                    f'<div class="action action-{rec["priority"]}">'
+                    f'<div class="action-head">'
+                    f'<span class="action-title">{rec["title"]}</span>'
+                    f'{render_pill(rec["priority"], status)}'
+                    f"</div>"
+                    f'<div class="action-trigger">Triggered by '
+                    f'<code>{rec["feature"]}</code> = {rec["feature_value"]:.2f} '
+                    f"&mdash; {rec['industry_mapping']}</div>"
+                    f"<ul>{steps}</ul>"
+                    f'<div class="action-context">{rec["plant_context"]}</div>'
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+        else:
             st.markdown(
-                f'<div class="action action-{rec["priority"]}">'
-                f'<div class="action-head">'
-                f'<span class="action-title">{rec["title"]}</span>'
-                f'{render_pill(rec["priority"], status)}'
-                f"</div>"
-                f'<div class="action-trigger">Triggered by '
-                f'<code>{rec["feature"]}</code> = {rec["feature_value"]:.2f} '
-                f"&mdash; {rec['industry_mapping']}</div>"
-                f"<ul>{steps}</ul>"
-                f'<div class="action-context">{rec["plant_context"]}</div>'
-                f"</div>",
+                render_notice(
+                    "No action required",
+                    "No feature pushed this asset toward failure. Continue on the "
+                    "normal maintenance schedule.",
+                    "good",
+                ),
                 unsafe_allow_html=True,
             )
-    else:
+
         st.markdown(
-            render_notice(
-                "No action required",
-                "No feature pushed this asset toward failure. Continue on the "
-                "normal maintenance schedule.",
-                "good",
-            ),
+            '<div class="disclaimer">These are model-derived suggestions. Confirm the '
+            "physical condition of the equipment with a qualified technician before "
+            "acting on any of them.</div>",
             unsafe_allow_html=True,
         )
 
-    st.markdown(
-        '<div class="disclaimer">These are model-derived suggestions. Confirm the '
-        "physical condition of the equipment with a qualified technician before "
-        "acting on any of them.</div>",
-        unsafe_allow_html=True,
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown(
         render_footer(

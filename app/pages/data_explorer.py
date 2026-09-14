@@ -12,6 +12,7 @@ import plotly.graph_objects as go
 
 from app.components.data_access import active_dataset
 from app.components.styles import (
+    panel,
     SERIES,
     TOKENS,
     plotly_layout,
@@ -134,61 +135,52 @@ def render_page(project_root, load_dataset_fn):
         )
 
         for col in chosen:
-            st.markdown('<div class="panel">', unsafe_allow_html=True)
-            st.markdown(
-                f'<div class="panel-head"><div class="panel-title">{col}</div></div>',
-                unsafe_allow_html=True,
-            )
-            fig = go.Figure()
-            for label, color, name in [
-                (0, SERIES[0], "Ran normally"),
-                (1, TOKENS["critical"], "Failed"),
-            ]:
-                fig.add_trace(go.Histogram(
-                    x=df[df[target_col] == label][col],
-                    name=name,
-                    marker_color=color,
-                    marker_line_width=0,
-                    opacity=0.65,
-                    nbinsx=40,
-                    histnorm="probability density",
-                ))
-            fig.update_layout(
-                **plotly_layout(
-                    height=260,
-                    show_legend=True,
-                    x_title=col,
-                    y_title="Density",
-                    barmode="overlay",
-                    bargap=0.04,
+            with panel('{col}'):
+                fig = go.Figure()
+                for label, color, name in [
+                    (0, SERIES[0], "Ran normally"),
+                    (1, TOKENS["critical"], "Failed"),
+                ]:
+                    fig.add_trace(go.Histogram(
+                        x=df[df[target_col] == label][col],
+                        name=name,
+                        marker_color=color,
+                        marker_line_width=0,
+                        opacity=0.65,
+                        nbinsx=40,
+                        histnorm="probability density",
+                    ))
+                fig.update_layout(
+                    **plotly_layout(
+                        height=260,
+                        show_legend=True,
+                        x_title=col,
+                        y_title="Density",
+                        barmode="overlay",
+                        bargap=0.04,
+                    )
                 )
-            )
-            st.plotly_chart(fig, use_container_width=True)
-            st.markdown("</div>", unsafe_allow_html=True)
+                st.plotly_chart(fig, use_container_width=True)
 
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="panel-head"><div class="panel-title">Spread comparison</div>'
-            '<div class="panel-note">Median, quartiles and outliers</div></div>',
-            unsafe_allow_html=True,
-        )
-        selected_feat = st.selectbox("Reading", available, key="de_box_feat")
-        if selected_feat in df.columns:
-            labelled = df.assign(
-                _outcome=df[target_col].map({0: "Ran normally", 1: "Failed"})
-            )
-            fig = px.box(
-                labelled, x="_outcome", y=selected_feat, color="_outcome",
-                color_discrete_map={
-                    "Ran normally": SERIES[0], "Failed": TOKENS["critical"]
-                },
-                category_orders={"_outcome": ["Ran normally", "Failed"]},
-            )
-            fig.update_layout(
-                **plotly_layout(height=320, x_title=None, y_title=selected_feat)
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+
+        with panel('Spread comparison', 'Median, quartiles and outliers'):
+            selected_feat = st.selectbox("Reading", available, key="de_box_feat")
+            if selected_feat in df.columns:
+                labelled = df.assign(
+                    _outcome=df[target_col].map({0: "Ran normally", 1: "Failed"})
+                )
+                fig = px.box(
+                    labelled, x="_outcome", y=selected_feat, color="_outcome",
+                    color_discrete_map={
+                        "Ran normally": SERIES[0], "Failed": TOKENS["critical"]
+                    },
+                    category_orders={"_outcome": ["Ran normally", "Failed"]},
+                )
+                fig.update_layout(
+                    **plotly_layout(height=320, x_title=None, y_title=selected_feat)
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
 
         # Failure type breakdown
         st.markdown("#### Recorded failure modes")
@@ -238,84 +230,74 @@ def render_page(project_root, load_dataset_fn):
     # ========================================================================
 
     with tabs[2]:
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="panel-head"><div class="panel-title">Correlation matrix</div>'
-            '<div class="panel-note">Pearson, pairwise</div></div>',
-            unsafe_allow_html=True,
-        )
+        with panel('Correlation matrix', 'Pearson, pairwise'):
 
-        corr = df[available + [target_col]].corr()
-        short = [c.split(" [")[0] for c in corr.columns]
+            corr = df[available + [target_col]].corr()
+            short = [c.split(" [")[0] for c in corr.columns]
 
-        # Diverging: blue for negative, red for positive, neutral grey at zero.
-        fig = go.Figure(go.Heatmap(
-            z=corr.values,
-            x=short,
-            y=short,
-            colorscale=[
-                [0.0, "#184f95"], [0.25, "#6da7ec"], [0.5, TOKENS["surface_raised"]],
-                [0.75, "#e07a6a"], [1.0, "#a32a2a"],
-            ],
-            zmid=0, zmin=-1, zmax=1,
-            text=corr.round(2).values,
-            texttemplate="%{text}",
-            textfont={"size": 10, "color": TOKENS["ink"]},
-            hovertemplate="%{y} vs %{x}: %{z:.3f}<extra></extra>",
-            xgap=2, ygap=2,
-            colorbar=dict(
-                thickness=10, len=0.7,
-                tickfont=dict(size=10, color=TOKENS["ink_muted"]),
-                outlinewidth=0,
-            ),
-        ))
-        fig.update_layout(
-            **plotly_layout(
-                height=430, margin=dict(t=8, b=8, l=8, r=8),
-                xaxis=dict(showgrid=False, showline=False, tickangle=-30,
-                           tickfont=dict(size=10, color=TOKENS["ink_muted"])),
-                yaxis=dict(showgrid=False, showline=False, autorange="reversed",
-                           tickfont=dict(size=10, color=TOKENS["ink_muted"])),
+            # Diverging: blue for negative, red for positive, neutral grey at zero.
+            fig = go.Figure(go.Heatmap(
+                z=corr.values,
+                x=short,
+                y=short,
+                colorscale=[
+                    [0.0, "#184f95"], [0.25, "#6da7ec"], [0.5, TOKENS["surface_raised"]],
+                    [0.75, "#e07a6a"], [1.0, "#a32a2a"],
+                ],
+                zmid=0, zmin=-1, zmax=1,
+                text=corr.round(2).values,
+                texttemplate="%{text}",
+                textfont={"size": 10, "color": TOKENS["ink"]},
+                hovertemplate="%{y} vs %{x}: %{z:.3f}<extra></extra>",
+                xgap=2, ygap=2,
+                colorbar=dict(
+                    thickness=10, len=0.7,
+                    tickfont=dict(size=10, color=TOKENS["ink_muted"]),
+                    outlinewidth=0,
+                ),
+            ))
+            fig.update_layout(
+                **plotly_layout(
+                    height=430, margin=dict(t=8, b=8, l=8, r=8),
+                    xaxis=dict(showgrid=False, showline=False, tickangle=-30,
+                               tickfont=dict(size=10, color=TOKENS["ink_muted"])),
+                    yaxis=dict(showgrid=False, showline=False, autorange="reversed",
+                               tickfont=dict(size=10, color=TOKENS["ink_muted"])),
+                )
             )
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        st.caption(
-            "Torque and rotational speed are strongly negatively correlated — "
-            "the drive trades one against the other to hold power roughly "
-            "constant. That relationship is why their ratio is an engineered feature."
-        )
-        st.markdown("</div>", unsafe_allow_html=True)
-
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="panel-head"><div class="panel-title">Pairwise view</div>'
-            '<div class="panel-note">Pick any two readings</div></div>',
-            unsafe_allow_html=True,
-        )
-        sc1, sc2 = st.columns(2)
-        with sc1:
-            x_feat = st.selectbox("Horizontal", available, index=min(3, len(available) - 1),
-                                  key="de_x")
-        with sc2:
-            y_feat = st.selectbox("Vertical", available, index=min(2, len(available) - 1),
-                                  key="de_y")
-
-        labelled = df.assign(_outcome=df[target_col].map({0: "Ran normally", 1: "Failed"}))
-        fig = px.scatter(
-            labelled, x=x_feat, y=y_feat, color="_outcome",
-            color_discrete_map={"Ran normally": SERIES[0], "Failed": TOKENS["critical"]},
-            category_orders={"_outcome": ["Ran normally", "Failed"]},
-            opacity=0.5,
-        )
-        fig.update_traces(marker=dict(size=5, line=dict(width=0)))
-        fig.update_layout(
-            **plotly_layout(
-                height=390, show_legend=True, x_title=x_feat, y_title=y_feat,
-                legend_title_text="",
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption(
+                "Torque and rotational speed are strongly negatively correlated — "
+                "the drive trades one against the other to hold power roughly "
+                "constant. That relationship is why their ratio is an engineered feature."
             )
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+
+
+        with panel('Pairwise view', 'Pick any two readings'):
+            sc1, sc2 = st.columns(2)
+            with sc1:
+                x_feat = st.selectbox("Horizontal", available, index=min(3, len(available) - 1),
+                                      key="de_x")
+            with sc2:
+                y_feat = st.selectbox("Vertical", available, index=min(2, len(available) - 1),
+                                      key="de_y")
+
+            labelled = df.assign(_outcome=df[target_col].map({0: "Ran normally", 1: "Failed"}))
+            fig = px.scatter(
+                labelled, x=x_feat, y=y_feat, color="_outcome",
+                color_discrete_map={"Ran normally": SERIES[0], "Failed": TOKENS["critical"]},
+                category_orders={"_outcome": ["Ran normally", "Failed"]},
+                opacity=0.5,
+            )
+            fig.update_traces(marker=dict(size=5, line=dict(width=0)))
+            fig.update_layout(
+                **plotly_layout(
+                    height=390, show_legend=True, x_title=x_feat, y_title=y_feat,
+                    legend_title_text="",
+                )
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
 
     # ========================================================================
     # TAB 4 — Interactive Filter
