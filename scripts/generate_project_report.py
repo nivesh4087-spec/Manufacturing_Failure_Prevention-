@@ -53,11 +53,31 @@ FIGURES = {
 }
 
 
+def _artifact_time() -> float:
+    """Return the modification time of the most recently written model artifact."""
+    models = sorted((project_root / "models").glob("*.joblib"))
+    return max((p.stat().st_mtime for p in models), default=0.0)
+
+
 def figure(key: str, caption: str) -> List[str]:
-    """Return markdown for a figure, or a placeholder note if it is missing."""
+    """Return markdown for a figure, flagging absence or staleness.
+
+    A figure older than the model artifacts was drawn from a previous run and no
+    longer describes the model the rest of the report is about. Embedding it
+    silently would be the same class of error this generator exists to avoid, so
+    it is labelled rather than quietly shown.
+    """
     path = project_root / FIGURES[key]
     if not path.exists():
-        return [f"> _Figure not generated yet: `{FIGURES[key]}`._", ""]
+        return [f"> _Figure not generated: `{FIGURES[key]}`._", ""]
+
+    if path.stat().st_mtime < _artifact_time():
+        return [
+            f"> _`{FIGURES[key]}` predates the current model and is not shown. "
+            "Re-run the training pipeline to regenerate it._",
+            "",
+        ]
+
     return [f"![{caption}]({FIGURES[key]})", f"*{caption}*", ""]
 
 

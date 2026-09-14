@@ -149,11 +149,9 @@ Every prediction carries a SHAP breakdown showing which readings pushed it towar
 
 > _Global SHAP importance is produced by the full training run; it has not been generated for this report._
 
-![Global feature importance](reports/figures/shap_bar.png)
-*Global feature importance*
+> _`reports/figures/shap_bar.png` predates the current model and is not shown. Re-run the training pipeline to regenerate it._
 
-![SHAP summary — direction and magnitude per feature](reports/figures/shap_summary.png)
-*SHAP summary — direction and magnitude per feature*
+> _`reports/figures/shap_summary.png` predates the current model and is not shown. Re-run the training pipeline to regenerate it._
 
 The platform converts each explanation into an instruction. A prediction driven by accumulated wear produces *inspect the punch and die at the stamping station*, not *tool_wear_min = 0.82*.
 

@@ -53,6 +53,7 @@ def train_baseline(
     config: Dict[str, Any],
     project_root: Optional[Path] = None,
     progress: Optional[Callable[[str], None]] = None,
+    generate_plots: bool = True,
 ) -> Dict[str, Any]:
     """Train, calibrate and persist a baseline model set.
 
@@ -61,6 +62,9 @@ def train_baseline(
         project_root: Repository root. Defaults to the package's grandparent.
         progress: Optional callback invoked with human-readable status strings,
             so a caller (the dashboard) can surface progress live.
+        generate_plots: Write the evaluation figures too. On by default so the
+            figure set on disk always describes the model on disk — a stale
+            figure beside a fresh model is how a report ends up misleading.
 
     Returns:
         A summary dict with ``best_model_name``, ``test_results``,
@@ -144,6 +148,43 @@ def train_baseline(
         },
     }
     model_dir = save_model_artifacts(artifacts, config, project_root)
+
+    if generate_plots:
+        say("Generating evaluation figures...")
+        try:
+            import matplotlib
+
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+
+            from src.evaluation.evaluator import (
+                generate_all_plots,
+                plot_class_distribution,
+                plot_correlation_heatmap,
+                plot_feature_distributions,
+            )
+
+            figures_dir = project_root / config["artifacts"]["figures_dir"]
+            figures_dir.mkdir(parents=True, exist_ok=True)
+
+            plot_models = dict(trained)
+            plot_models[f"{best_name} (Calibrated)"] = calibrated
+            generate_all_plots(plot_models, X_test, y_test, test_results, config, project_root)
+            plot_class_distribution(
+                df_raw[config["data"]["target_column"]], "Class distribution", figures_dir
+            )
+            plt.close("all")
+
+            # Data-level figures: about the dataset rather than the model, but
+            # regenerated together so nothing on disk is older than the rest.
+            eda = processed["X_train_unscaled"].copy()
+            eda["machine_failure"] = processed["y_train_original"].values[: len(eda)]
+            plot_feature_distributions(eda, "machine_failure", figures_dir)
+            plt.close("all")
+            plot_correlation_heatmap(eda, figures_dir)
+            plt.close("all")
+        except Exception as exc:  # figures are useful, not essential
+            logger.warning("Figure generation failed (%s); continuing.", exc)
 
     elapsed = time.perf_counter() - started
     say(f"Baseline ready in {elapsed:.0f}s — best model: {best_name}")
