@@ -36,7 +36,17 @@ from sklearn.metrics import (
     roc_auc_score, average_precision_score,
     brier_score_loss,
 )
-import xgboost as xgb
+
+# XGBoost is an optional heavy dependency. Import it lazily so a minimal install
+# (or an environment where the wheel failed to build) can still train, evaluate
+# and serve the scikit-learn models instead of failing at import time.
+try:
+    import xgboost as xgb
+
+    XGBOOST_AVAILABLE = True
+except ImportError:  # pragma: no cover - depends on the install profile
+    xgb = None
+    XGBOOST_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +90,13 @@ def get_model_registry(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
             "type": "tree",
         }
 
-    if config["models"]["xgboost"]["enabled"]:
+    if config["models"]["xgboost"]["enabled"] and not XGBOOST_AVAILABLE:
+        logger.warning(
+            "XGBoost is enabled in config but not installed — skipping it. "
+            "Run `pip install xgboost` to include it in the comparison."
+        )
+
+    if config["models"]["xgboost"]["enabled"] and XGBOOST_AVAILABLE:
         models["XGBoost"] = {
             "estimator": xgb.XGBClassifier(
                 **config["models"]["xgboost"]["params"],
