@@ -48,9 +48,9 @@ models/*.joblib
 models/*.pkl
 models/*.json
 
-# Reports (generated)
-reports/figures/*.png
-reports/figures/*.svg
+# Reports (allow figures and reports to be tracked)
+# reports/figures/*.png
+# reports/figures/*.svg
 reports/results/*.json
 reports/results/*.csv
 
