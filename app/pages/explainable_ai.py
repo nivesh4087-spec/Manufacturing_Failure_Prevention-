@@ -1,276 +1,413 @@
 """
-Explainable AI Module
-=====================
-Global and local SHAP explanations for model predictions.
+Model Diagnostics
+=================
+What the model has learned, and why it reaches a given conclusion.
 
-Shows:
-- Global feature importance (SHAP bar plot, summary/beeswarm)
-- Feature importance ranking table
-- Local explanations for individual samples
-- Industry mapping context
+Global view: which sensor readings move predictions across the whole fleet.
+Local view: the same breakdown for one chosen asset.
+Station view: what each feature corresponds to on the shop floor.
 """
 
-import streamlit as st
-import numpy as np
-import pandas as pd
+from __future__ import annotations
+
 from pathlib import Path
+from typing import Any, Dict
+
+import pandas as pd
 import plotly.graph_objects as go
+import streamlit as st
 
-from app.components.styles import render_header_banner
+from app.components.data_access import active_dataset
+from app.components.styles import (
+    SERIES,
+    TOKENS,
+    plotly_layout,
+    render_footer,
+    render_masthead,
+    render_notice,
+    render_risk_pill,
+    render_stat_tile,
+)
 
 
-def render_page(project_root, load_artifacts_fn, load_dataset_fn, load_results_fn):
-    """Render the Explainable AI page."""
-
-    st.markdown(render_header_banner(
-        "Explainable AI — SHAP Analysis",
-        "Understanding WHY the model predicts failure using feature attribution analysis"
-    ), unsafe_allow_html=True)
-
-    # Load artifacts
+def render_page(project_root: Path, load_artifacts_fn, load_dataset_fn, load_results_fn) -> None:
+    """Render the Model Diagnostics page."""
     try:
         artifacts, config = load_artifacts_fn()
-    except Exception as e:
-        st.error(f"Model not loaded: {e}")
+    except Exception as exc:
+        st.markdown(render_notice("Models unavailable", str(exc), "critical"), unsafe_allow_html=True)
         return
 
-    tabs = st.tabs(["🌐 Global Explainability", "🔬 Local Explainability", "🏭 Industry Mapping"])
+    best_name = artifacts.get("best_model_name", "model")
 
-    # ========================================================================
-    # TAB 1 — Global Explainability
-    # ========================================================================
+    st.markdown(
+        render_masthead(
+            "Model Diagnostics",
+            "Feature attribution from SHAP — what the model weighs, and how it "
+            "reached a particular answer.",
+            f"{best_name}<br>Shapley additive explanations",
+        ),
+        unsafe_allow_html=True,
+    )
 
-    with tabs[0]:
-        st.markdown("### Global Feature Importance")
+    tab_global, tab_local, tab_stations = st.tabs(
+        ["Across the fleet", "One asset", "Station mapping"]
+    )
+
+    with tab_global:
+        _render_global(artifacts, config, load_results_fn)
+
+    with tab_local:
+        _render_local(artifacts, config, load_dataset_fn)
+
+    with tab_stations:
+        _render_station_mapping(config)
+
+    st.markdown(
+        render_footer("Explanations computed with SHAP", f"Model: {best_name}"),
+        unsafe_allow_html=True,
+    )
+
+
+# ============================================================================
+# Global
+# ============================================================================
+
+def _render_global(artifacts: Dict[str, Any], config: Dict[str, Any], load_results_fn) -> None:
+    """Render fleet-wide feature importance."""
+    shap_data = load_results_fn("shap_analysis.json")
+
+    if not shap_data or "feature_importance" not in shap_data:
         st.markdown(
-            "Global SHAP analysis answers: **'What factors generally cause the model "
-            "to predict failure?'** Features are ranked by their average impact on "
-            "predictions across the entire test set."
+            render_notice(
+                "Global analysis not computed yet",
+                "Fleet-wide SHAP importance is written by the full training run. "
+                "Run <code>python scripts/train_pipeline.py --mode fast</code> to "
+                "generate it. The single-asset view on the next tab works without it.",
+                "warning",
+            ),
+            unsafe_allow_html=True,
         )
+        return
 
-        # Load pre-computed SHAP importance
-        shap_data = load_results_fn("shap_analysis.json")
+    imp_df = pd.DataFrame(shap_data["feature_importance"])
+    mapping = config.get("industry_mapping", {})
 
-        if shap_data and "feature_importance" in shap_data:
-            importance = shap_data["feature_importance"]
-            imp_df = pd.DataFrame(importance)
+    top = imp_df.head(12).copy()
+    top["label"] = top["feature"].map(lambda f: mapping.get(f, f))
 
-            # Bar chart
-            fig = go.Figure(go.Bar(
-                y=imp_df["feature"].head(12),
-                x=imp_df["mean_abs_shap"].head(12),
-                orientation="h",
-                marker_color="#3b82f6",
-                text=[f"{v:.4f}" for v in imp_df["mean_abs_shap"].head(12)],
-                textposition="outside",
-                textfont=dict(size=11, color="#94a3b8"),
-            ))
-            fig.update_layout(
-                title="SHAP Feature Importance — Mean |SHAP Value|",
-                title_font=dict(size=16, color="#e2e8f0"),
-                height=450,
-                margin=dict(t=50, b=30, l=10, r=70),
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#94a3b8"),
-                xaxis_title="Mean |SHAP Value|",
-                yaxis=dict(autorange="reversed"),
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-            # Importance table
-            st.markdown("#### 📊 Feature Importance Ranking")
-            display_df = imp_df[["rank", "feature", "mean_abs_shap", "contribution_pct"]].copy()
-            display_df.columns = ["Rank", "Feature", "Mean |SHAP|", "Contribution %"]
-            st.dataframe(display_df, use_container_width=True, hide_index=True)
-
-        st.markdown("""
-        <div class="disclaimer">
-            <strong>Understanding Global SHAP Feature Importance:</strong>
-            <ul style="margin: 4px 0;">
-                <li>The interactive bar chart above displays the average absolute SHAP values for each feature.</li>
-                <li><strong>Mean |SHAP Value|</strong>: Measures the overall impact of a feature on the model's predictions. A higher value indicates that the feature is more influential in predicting equipment failure.</li>
-                <li><strong>Contribution %</strong>: The relative importance of each feature normalized as a percentage of total model impact.</li>
-                <li>SHAP values are mathematically robust, derived from cooperative game theory, ensuring fair credit assignment to each feature.</li>
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
-
-
-    # ========================================================================
-    # TAB 2 — Local Explainability
-    # ========================================================================
-
-    with tabs[1]:
-        st.markdown("### Individual Prediction Explanation")
+    c1, c2, c3 = st.columns(3)
+    with c1:
         st.markdown(
-            "Local SHAP analysis answers: **'Why is THIS specific machine at risk?'** "
-            "Select a sample from the dataset or enter custom parameters."
+            render_stat_tile("Features analysed", str(len(imp_df)), "Raw plus engineered", "neutral"),
+            unsafe_allow_html=True,
+        )
+    with c2:
+        leader = imp_df.iloc[0]
+        st.markdown(
+            render_stat_tile(
+                "Strongest driver",
+                mapping.get(leader["feature"], leader["feature"]).split(",")[0],
+                f"{leader['contribution_pct']:.1f}% of total attribution",
+                "accent",
+            ),
+            unsafe_allow_html=True,
+        )
+    with c3:
+        top3 = float(imp_df.head(3)["contribution_pct"].sum())
+        st.markdown(
+            render_stat_tile(
+                "Top three share", f"{top3:.0f}%", "Concentration of model attention", "neutral"
+            ),
+            unsafe_allow_html=True,
         )
 
-        # Load dataset for sample selection
-        try:
-            df = load_dataset_fn()
+    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="panel-head"><div class="panel-title">Mean absolute SHAP value</div>'
+        '<div class="panel-note">Higher means the feature moves predictions more</div></div>',
+        unsafe_allow_html=True,
+    )
 
-            # Prepare dataset for display
-            from src.preprocessing.pipeline import (
-                drop_leakage_columns, drop_id_columns, rename_columns,
-                encode_type_column
-            )
-            from src.features.engineer import engineer_features
-            from src.preprocessing.pipeline import apply_scaler
+    fig = go.Figure(
+        go.Bar(
+            y=top["label"],
+            x=top["mean_abs_shap"],
+            orientation="h",
+            marker_color=SERIES[0],
+            marker_line_width=0,
+            customdata=top[["feature", "contribution_pct"]].values,
+            hovertemplate="%{customdata[0]}<br>Mean |SHAP| %{x:.4f}<br>"
+            "%{customdata[1]:.1f}% of total<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        **plotly_layout(
+            height=52 + 30 * len(top),
+            x_title="Mean |SHAP value|",
+            margin=dict(t=8, b=42, l=8, r=20),
+            yaxis=dict(
+                autorange="reversed",
+                tickfont=dict(size=11, color=TOKENS["ink_secondary"]),
+                showgrid=False,
+                showline=False,
+                automargin=True,
+            ),
+        )
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
-            feature_stats = artifacts["feature_stats"]
-            scaler = artifacts["scaler"]
-            feature_names = artifacts["feature_names"]
-            numerical_cols = artifacts["numerical_cols"]
+    with st.expander("Full ranking as a table"):
+        table = imp_df[["rank", "feature", "mean_abs_shap", "contribution_pct"]].copy()
+        table["station"] = table["feature"].map(lambda f: mapping.get(f, "—"))
+        table.columns = ["Rank", "Feature", "Mean |SHAP|", "Share %", "Station"]
+        st.dataframe(table, use_container_width=True, hide_index=True)
 
-            df_proc = drop_leakage_columns(df.copy(), config)
-            df_proc = drop_id_columns(df_proc, config)
-            df_proc = rename_columns(df_proc, config)
-            df_proc = encode_type_column(df_proc, config)
+    st.markdown(
+        '<div class="disclaimer">SHAP distributes a prediction among its inputs '
+        "using Shapley values from cooperative game theory, so the contributions "
+        "sum to the difference between this prediction and the average one. "
+        "Importance here is influence on the model, which is not the same as "
+        "physical causation.</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
 
-            target = df_proc.pop("machine_failure")
-            df_proc, _ = engineer_features(df_proc, config, fit_stats=feature_stats)
-            df_scaled = apply_scaler(df_proc, scaler, config, feature_cols=numerical_cols)
 
-            # Sample selector
-            sample_options = {
-                "Random Normal (No Failure)": target[target == 0].sample(1, random_state=42).index[0],
-                "Random Failure": target[target == 1].sample(1, random_state=42).index[0],
-            }
+# ============================================================================
+# Local
+# ============================================================================
 
-            # Add a few specific indices
-            failure_indices = target[target == 1].head(5).index.tolist()
-            for i, idx in enumerate(failure_indices):
-                sample_options[f"Failure Sample #{i+1} (idx={idx})"] = idx
+@st.cache_data(show_spinner="Preparing samples...")
+def _prepare_samples(_df: pd.DataFrame, _artifacts: Dict[str, Any], _config: Dict[str, Any], cache_key: str):
+    """Preprocess the dataset once for the sample explorer.
 
-            selected_sample = st.selectbox(
-                "Select a sample to explain:",
-                list(sample_options.keys()),
-            )
+    Returns the scaled feature frame alongside the target, so the selector can
+    offer real failing and passing assets rather than synthetic ones.
+    """
+    from src.features.engineer import engineer_features
+    from src.preprocessing.pipeline import (
+        apply_scaler,
+        drop_id_columns,
+        drop_leakage_columns,
+        encode_type_column,
+        rename_columns,
+    )
 
-            idx = sample_options[selected_sample]
-            X_single = df_scaled.loc[[idx]]
+    proc = drop_leakage_columns(_df.copy(), _config)
+    proc = drop_id_columns(proc, _config)
+    proc = rename_columns(proc, _config)
+    proc = encode_type_column(proc, _config)
+    target = proc.pop("machine_failure")
+    proc, _ = engineer_features(proc, _config, fit_stats=_artifacts["feature_stats"])
+    scaled = apply_scaler(proc, _artifacts["scaler"], _config, feature_cols=_artifacts["numerical_cols"])
+    return scaled, target
 
-            # Get prediction
-            model = artifacts.get("best_model_calibrated", artifacts.get("best_model"))
-            prob = float(model.predict_proba(X_single)[:, 1][0])
-            pred = "FAILURE" if prob >= 0.5 else "NO FAILURE"
 
-            # SHAP explanation
-            from src.explainability.shap_engine import SHAPEngine
+def _render_local(artifacts: Dict[str, Any], config: Dict[str, Any], load_dataset_fn) -> None:
+    """Render the single-asset explanation."""
+    from app.pages.risk_predictor import _build_explainer
 
-            best_model_raw = artifacts.get("best_model")
-            bg = df_scaled.sample(n=min(100, len(df_scaled)), random_state=42)
+    df, _ = active_dataset(load_dataset_fn)
 
-            shap_engine = SHAPEngine(
-                model=best_model_raw,
-                X_background=bg,
-                config=config,
-                model_type="tree",
-                feature_names=feature_names,
-            )
+    try:
+        scaled, target = _prepare_samples(
+            df, artifacts, config, cache_key=artifacts.get("best_model_name", "m")
+        )
+    except Exception as exc:
+        st.markdown(
+            render_notice("Samples unavailable", f"{type(exc).__name__}: {exc}", "critical"),
+            unsafe_allow_html=True,
+        )
+        return
 
-            explanation = shap_engine.explain_single_prediction(X_single, top_n=10)
+    failing = target[target == 1].index.tolist()
+    passing = target[target == 0].index.tolist()
 
-            # Display
-            from src.risk.scoring import compute_risk_score, get_risk_category
-            risk_score = compute_risk_score(prob, config)
-            risk_cat = get_risk_category(risk_score, config)
+    choice_col, idx_col = st.columns([1, 2])
+    with choice_col:
+        pool_name = st.radio(
+            "Sample pool",
+            ["Recorded failures", "Normal operation"],
+            horizontal=False,
+            key="xai_pool",
+        )
+    pool = failing if pool_name == "Recorded failures" else passing
 
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.metric("Prediction", pred)
-            with c2:
-                st.metric("Failure Probability", f"{prob*100:.1f}%")
-            with c3:
-                st.metric("Risk Score", f"{risk_score:.0f}/100")
+    if not pool:
+        st.markdown(
+            render_notice("No samples", f"The dataset contains no {pool_name.lower()}.", "warning"),
+            unsafe_allow_html=True,
+        )
+        return
 
-            st.markdown(f"**Risk Level:** {render_risk_badge_inline(risk_cat)}")
+    with idx_col:
+        position = st.slider(
+            "Sample", 0, max(len(pool) - 1, 0), 0, key="xai_position",
+            help="Step through the assets in the selected pool.",
+        )
+    idx = pool[position]
+    X_single = scaled.loc[[idx]]
 
-            # SHAP waterfall
-            if explanation.get("top_factors"):
-                st.markdown("#### Feature Contributions")
+    model = artifacts.get("best_model_calibrated") or artifacts["best_model"]
+    prob = float(model.predict_proba(X_single)[:, 1][0])
 
-                factors = explanation["top_factors"][:10]
-                feat_names = [f["feature"] for f in factors]
-                shap_vals = [f["shap_value"] for f in factors]
-                colors = ["#ef4444" if v > 0 else "#22c55e" for v in shap_vals]
+    from src.risk.scoring import compute_risk_score, get_risk_category
 
-                fig = go.Figure(go.Bar(
-                    y=feat_names,
-                    x=shap_vals,
-                    orientation="h",
-                    marker_color=colors,
-                    text=[f"{v:+.4f}" for v in shap_vals],
-                    textposition="outside",
-                    textfont=dict(size=11, color="#94a3b8"),
-                ))
-                fig.update_layout(
-                    title="SHAP Waterfall — Feature Contributions to This Prediction",
-                    title_font=dict(size=14, color="#e2e8f0"),
-                    height=380,
-                    margin=dict(t=50, b=30, l=10, r=70),
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    font=dict(color="#94a3b8"),
-                    xaxis_title="SHAP Value",
-                    yaxis=dict(autorange="reversed"),
-                )
-                st.plotly_chart(fig, use_container_width=True)
+    risk_score = compute_risk_score(prob, config)
+    risk_cat = get_risk_category(risk_score, config)
+    actual = "Failed" if target.loc[idx] == 1 else "Ran normally"
+    predicted_fail = prob >= 0.5
+    agrees = predicted_fail == (target.loc[idx] == 1)
 
-                # Text explanation
-                st.markdown("#### 📝 Plain-English Explanation")
-                for f in factors[:5]:
-                    arrow = "🔴" if f["impact"] == "increases risk" else "🟢"
-                    feat_mapped = config.get("industry_mapping", {}).get(
-                        f["feature"], f["feature"]
-                    )
-                    st.markdown(
-                        f"- {arrow} **{f['feature']}** ({feat_mapped}) = "
-                        f"`{f['value']:.3f}` → **{f['impact']}**"
-                    )
-
-        except Exception as e:
-            st.error(f"Local explanation failed: {e}")
-            st.info("This may occur if the model or dataset is not properly loaded.")
-
-    # ========================================================================
-    # TAB 3 — Industry Mapping
-    # ========================================================================
-
-    with tabs[2]:
-        st.markdown("### 🏭 Ceiling Fan Manufacturing — Sensor Feature Mapping")
-
-        st.info(
-            "📌 **Industry Context**: This table maps each sensor feature to its "
-            "operational role in ceiling fan manufacturing processes."
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.markdown(
+            render_stat_tile("Asset row", f"#{idx}", pool_name, "neutral"), unsafe_allow_html=True
+        )
+    with c2:
+        st.markdown(
+            render_stat_tile(
+                "Failure probability", f"{prob * 100:.1f}%", render_risk_pill(risk_cat["label"]),
+                "critical" if predicted_fail else "good",
+            ),
+            unsafe_allow_html=True,
+        )
+    with c3:
+        st.markdown(
+            render_stat_tile("Risk score", f"{risk_score:.0f}", "Out of 100", "neutral"),
+            unsafe_allow_html=True,
+        )
+    with c4:
+        st.markdown(
+            render_stat_tile(
+                "Ground truth", actual,
+                "Model agrees" if agrees else "Model disagrees",
+                "good" if agrees else "warning",
+            ),
+            unsafe_allow_html=True,
         )
 
-        mapping = config.get("industry_mapping", {})
-        mapping_df = pd.DataFrame([
-            {"Feature": k, "Fan Manufacturing Interpretation": v}
-            for k, v in mapping.items()
-        ])
+    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
 
-        if not mapping_df.empty:
-            st.dataframe(mapping_df, use_container_width=True, hide_index=True)
+    try:
+        engine = _build_explainer(artifacts, config, cache_key=artifacts.get("best_model_name", "m"))
+        explanation = engine.explain_single_prediction(X_single, top_n=10)
+    except Exception as exc:
+        st.markdown(
+            render_notice("Explanation failed", f"{type(exc).__name__}: {exc}", "warning"),
+            unsafe_allow_html=True,
+        )
+        return
 
-        st.markdown("""
-        ### 📋 Interpretation Guide
+    factors = explanation.get("top_factors", [])
+    if not factors:
+        st.caption("No feature moved this prediction materially.")
+        return
 
-        | Sensor Feature | Manufacturing Context | Operational Significance |
-        |---|---|---|
-        | Air Temperature | Ambient factory floor temp | Affects motor cooling during QC test |
-        | Process Temperature | Motor winding temp | Overheating → insulation breakdown |
-        | Rotational Speed | Fan motor test RPM | Too low → motor defect, Too high → imbalance |
-        | Torque | Motor shaft load | Excessive load → bearing/motor failure |
-        | Tool Wear | Stamping tool condition | Worn tools → blade defects, misalignment |
-        | Equipment Failure | Production line failure | Any equipment failure halting production |
-        """)
+    mapping = config.get("industry_mapping", {})
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="panel-head"><div class="panel-title">Contribution breakdown</div>'
+        '<div class="panel-note">Right pushes toward failure, left pushes away</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    labels = [mapping.get(f["feature"], f["feature"]) for f in factors]
+    values = [f["shap_value"] for f in factors]
+    fig = go.Figure(
+        go.Bar(
+            y=labels,
+            x=values,
+            orientation="h",
+            marker_color=[TOKENS["critical"] if v > 0 else TOKENS["good"] for v in values],
+            marker_line=dict(width=2, color=TOKENS["surface"]),
+            customdata=[[f["feature"], f["value"]] for f in factors],
+            hovertemplate="%{customdata[0]} = %{customdata[1]:.3f}<br>SHAP %{x:+.4f}<extra></extra>",
+        )
+    )
+    fig.add_vline(x=0, line_width=1, line_color=TOKENS["border_strong"])
+    fig.update_layout(
+        **plotly_layout(
+            height=52 + 32 * len(factors),
+            x_title="SHAP contribution",
+            margin=dict(t=8, b=42, l=8, r=24),
+            yaxis=dict(
+                autorange="reversed",
+                tickfont=dict(size=11, color=TOKENS["ink_secondary"]),
+                showgrid=False,
+                showline=False,
+                automargin=True,
+            ),
+        )
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown(
+        '<div class="panel-title" style="margin-top:8px;">In plain terms</div>',
+        unsafe_allow_html=True,
+    )
+    for factor in factors[:5]:
+        direction = "raised" if factor["impact"] == "increases risk" else "lowered"
+        station = mapping.get(factor["feature"], factor["feature"])
+        st.markdown(
+            f'<div style="font-size:0.82rem; color:var(--ink-secondary); padding:4px 0; '
+            f'border-bottom:1px solid var(--border);">'
+            f'<strong style="color:var(--ink);">{station}</strong> at '
+            f'<code>{factor["value"]:.2f}</code> {direction} the failure estimate '
+            f'<span style="font-variant-numeric:tabular-nums;">'
+            f'({factor["shap_value"]:+.4f})</span></div>',
+            unsafe_allow_html=True,
+        )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
-def render_risk_badge_inline(risk_cat: dict) -> str:
-    """Render risk badge as inline text for st.markdown."""
-    return f"{risk_cat['emoji']} **{risk_cat['label']}**"
+# ============================================================================
+# Station mapping
+# ============================================================================
+
+def _render_station_mapping(config: Dict[str, Any]) -> None:
+    """Render what each model feature corresponds to on the plant floor."""
+    st.markdown(
+        render_notice(
+            "Reading this page against the plant",
+            "Line 1 is the CNC stamping and milling machinery the model monitors. "
+            "Line 2 is the tile inspection line downstream. Tool condition on "
+            "Line 1 is what drives the defect rate on Line 2, which is why a "
+            "machinery model is worth running at all.",
+            "accent",
+        ),
+        unsafe_allow_html=True,
+    )
+
+    mapping = config.get("industry_mapping", {})
+    if not mapping:
+        st.caption("No station mapping configured.")
+        return
+
+    engineered = set(config.get("features", {}).get("engineered", {}))
+    rows = [
+        {
+            "Feature": feature,
+            "Station or reading": label,
+            "Source": "Derived" if feature in engineered or feature.startswith("is_")
+            or feature.endswith(("_severity", "_indicator")) else "Sensor",
+        }
+        for feature, label in mapping.items()
+    ]
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    st.markdown(
+        """
+#### How each reading turns into a failure mode
+
+| Reading drifts | Physical mechanism | Failure mode it precedes |
+|:--|:--|:--|
+| Thermal margin narrows | Heat is not leaving the spindle housing | Heat dissipation failure |
+| Torque rises at constant speed | Board resists the cut; feed or density off spec | Overstrain failure |
+| Speed falls below setpoint | Supply instability or mechanical drag | Power failure |
+| Tool wear accumulates | Punch and die edge rounds off | Tool wear failure, then Line 2 edge chipping |
+| Torque high while speed low | The cut is stalling | Overstrain, with tool breakage risk |
+        """
+    )

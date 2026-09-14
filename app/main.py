@@ -1,20 +1,22 @@
 """
-XAI Predictive Maintenance Platform
-======================================
-Main Streamlit application entry point.
-
-Enterprise-grade Industrial AI Command Center for Explainable Predictive Maintenance.
+Predictive Maintenance & Inspection Platform
+============================================
+Streamlit entry point: theme injection, sidebar, cold-start handling and routing.
 
 Usage:
     streamlit run app/main.py
 """
 
-import sys
-import os
-from pathlib import Path
-from datetime import datetime
+from __future__ import annotations
 
-# Add project root to Python path and remove app directory to avoid module shadowing
+import json
+import logging
+import sys
+from datetime import datetime
+from pathlib import Path
+
+# Resolve the project root and drop `app/` from sys.path, or `app.pages` shadows
+# the stdlib-adjacent name `pages` that Streamlit itself looks for.
 project_root = Path(__file__).resolve().parent.parent
 app_dir = str(Path(__file__).resolve().parent)
 if app_dir in sys.path:
@@ -23,261 +25,444 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 import streamlit as st
-import json
-import logging
 
-# Resolve installed SHAP version for display (graceful fallback if not installed)
-try:
-    import shap as _shap
-    shap_ver = _shap.__version__
-except Exception:
-    shap_ver = "N/A"
-
-# Configure logging
 logging.basicConfig(level=logging.WARNING)
 
-# Page configuration — must be first Streamlit command
 st.set_page_config(
-    page_title="AI4I Maintenance Command Center | Enterprise AI",
-    page_icon="🛡️",
+    page_title="Predictive Maintenance & Inspection Platform",
+    page_icon="◉",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-from app.components.styles import get_custom_css, render_header_banner, render_status_badge
+from app.components.styles import (  # noqa: E402  (must follow set_page_config)
+    get_custom_css,
+    render_footer,
+    render_kv_rows,
+    render_notice,
+    render_pill,
+)
 
-# Inject custom CSS
 st.markdown(get_custom_css(), unsafe_allow_html=True)
 
+
 # ============================================================================
-# Cache model loading — runs only once
+# Cached loaders
 # ============================================================================
 
-@st.cache_resource(show_spinner="Loading AI models...")
+@st.cache_resource(show_spinner="Loading models...")
 def load_artifacts():
-    """Load all saved model artifacts. Cached to avoid reloading."""
-    from src.models.trainer import load_model_artifacts
+    """Load model artifacts and configuration. Cached for the server's lifetime."""
     from src.data.loader import load_config
+    from src.models.trainer import load_model_artifacts
 
     config = load_config(str(project_root / "config" / "config.yaml"))
     artifacts = load_model_artifacts(config, project_root)
     return artifacts, config
 
-@st.cache_data(show_spinner="Loading dataset...")
-def load_raw_dataset():
-    """Load the raw dataset for exploration. Cached."""
-    from src.data.loader import load_config, load_dataset
-    config = load_config(str(project_root / "config" / "config.yaml"))
-    df = load_dataset(config)
-    return df
 
-@st.cache_data(show_spinner="Loading results...")
+@st.cache_data(show_spinner="Loading telemetry...")
+def load_raw_dataset():
+    """Load the raw sensor dataset."""
+    from src.data.loader import load_config, load_dataset
+
+    config = load_config(str(project_root / "config" / "config.yaml"))
+    return load_dataset(config)
+
+
+@st.cache_data(show_spinner=False)
 def load_results_json(filename: str):
-    """Load a JSON results file."""
+    """Load a JSON results file written by the training pipeline, if present."""
     filepath = project_root / "reports" / "results" / filename
     if filepath.exists():
-        with open(filepath, "r") as f:
-            return json.load(f)
+        with open(filepath, "r", encoding="utf-8") as fh:
+            return json.load(fh)
     return None
 
+
+@st.cache_data(show_spinner=False)
+def load_config_only():
+    """Load configuration without touching model artifacts.
+
+    The cold-start screen needs the config before any model exists.
+    """
+    from src.data.loader import load_config
+
+    return load_config(str(project_root / "config" / "config.yaml"))
+
+
+def _package_version(name: str) -> str:
+    """Return an installed package's version, or ``"not installed"``."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version(name)
+    except PackageNotFoundError:
+        return "not installed"
+
+
 # ============================================================================
-# Initialize session state
+# Session state
 # ============================================================================
 
-def init_session_state():
-    """Initialize session state variables."""
+#: Page label -> (module path, extra loader arguments). The sidebar renders these
+#: in order and the router dispatches on the label.
+PAGES = {
+    "Asset Health": "app.pages.executive_overview",
+    "Risk Assessment": "app.pages.risk_predictor",
+    "Data Explorer": "app.pages.data_explorer",
+    "Model Diagnostics": "app.pages.explainable_ai",
+    "Defect Inspection": "app.pages.ceiling_inspection",
+    "Model & Cost Analysis": "app.pages.model_comparison",
+    "Batch Analysis": "app.pages.upload_predict",
+    "Alerts": "app.pages.monitoring_alerts",
+}
+
+
+def init_session_state() -> None:
+    """Seed the session keys the pages rely on."""
     if "prediction_history" not in st.session_state:
         from src.risk.scoring import PredictionHistory
+
         st.session_state.prediction_history = PredictionHistory(max_entries=500)
 
     if "current_page" not in st.session_state:
-        st.session_state.current_page = "Asset Health Monitor"
+        st.session_state.current_page = next(iter(PAGES))
 
-    if "tutorial_seen" not in st.session_state:
-        st.session_state.show_tutorial = True
-        st.session_state.tutorial_seen = True
+    # Show the guide once per browser session, not on every rerun.
+    if "guide_seen" not in st.session_state:
+        st.session_state.guide_seen = True
+        st.session_state.show_guide = True
+
 
 init_session_state()
 
+
 # ============================================================================
-# Sidebar Navigation
+# Cold start
 # ============================================================================
 
-def render_sidebar():
-    """Render the sidebar navigation."""
+def render_cold_start() -> None:
+    """Explain the missing artifacts and offer a one-click baseline training run.
+
+    Without this, a fresh clone lands on a raw stack trace. The button trains the
+    same preprocessing pipeline with fixed hyperparameters (~20-40s) instead of
+    making the user wait out the full randomised search.
+    """
+    st.markdown(
+        '<div class="masthead"><div><h1>Model artifacts not found</h1>'
+        '<div class="masthead-sub">The dashboard needs a trained model before it '
+        "can score telemetry. Train a fast baseline now, or run the full pipeline "
+        "for the tuned, calibrated model set.</div></div></div>",
+        unsafe_allow_html=True,
+    )
+
+    left, right = st.columns(2, gap="large")
+
+    with left:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="panel-title">Option A — baseline, about 30 seconds</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            "Trains Random Forest and HistGradientBoosting with fixed "
+            "hyperparameters, calibrates the better of the two, and writes the "
+            "same artifacts the full pipeline produces. Good enough to explore "
+            "every page."
+        )
+
+        if st.button("Train baseline model", type="primary", use_container_width=True):
+            status = st.status("Starting...", expanded=True)
+            try:
+                from src.models.baseline import train_baseline
+
+                config = load_config_only()
+                summary = train_baseline(
+                    config,
+                    project_root,
+                    progress=lambda message: status.write(message),
+                )
+                status.update(
+                    label=f"Done in {summary['elapsed_seconds']}s — "
+                    f"best model: {summary['best_model_name']}",
+                    state="complete",
+                )
+                load_artifacts.clear()
+                st.rerun()
+            except Exception as exc:  # surfaced to the user, not swallowed
+                status.update(label="Training failed", state="error")
+                st.error(f"{type(exc).__name__}: {exc}")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with right:
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="panel-title">Option B — full pipeline, 10 to 20 minutes</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            "Randomised hyperparameter search across every enabled model family, "
+            "probability calibration, SHAP analysis, ablation study and the full "
+            "figure set. Run it in a terminal:"
+        )
+        st.code("python scripts/train_pipeline.py --mode full", language="bash")
+        st.markdown("Or the quicker searched profile:")
+        st.code("python scripts/train_pipeline.py --mode fast", language="bash")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ============================================================================
+# Sidebar
+# ============================================================================
+
+def render_sidebar(artifacts_ready: bool) -> None:
+    """Render brand, navigation and the live system panel."""
     with st.sidebar:
-        # Brand header
-        st.markdown("""
-        <div style="padding: 12px 4px 10px 4px;">
-            <div style="font-size: 0.95rem; font-weight: 700; color: #f3f4f6; letter-spacing: -0.01em;">
-                INDUSTRIAL APM CENTER
+        st.markdown(
+            """
+            <div style="padding: 2px 2px 12px 2px;">
+                <div style="font-size: 0.92rem; font-weight: 600; color: var(--ink);
+                            letter-spacing: -0.01em;">
+                    Predictive Maintenance
+                </div>
+                <div style="font-size: 0.66rem; color: var(--ink-muted); font-weight: 500;
+                            letter-spacing: 0.09em; text-transform: uppercase; margin-top: 2px;">
+                    Ceiling Systems Plant
+                </div>
             </div>
-            <div style="font-size: 0.68rem; color: #3b82f6; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;">
-                Predictive Maintenance & Inspection
-            </div>
-        </div>
-        <hr style="border-color: #1f2937; margin: 8px 0 14px 0;">
-        """, unsafe_allow_html=True)
-
-        # Navigation Streamlined & Professional
-        pages = {
-            "Asset Health Monitor": "Asset Health Monitor",
-            "Predictive Risk Assessment": "Predictive Risk Assessment",
-            "AI Diagnostics & SHAP": "AI Diagnostics & SHAP",
-            "False Ceiling Defect Inspection": "False Ceiling Defect Inspection",
-            "Financial ROI & Models": "Financial ROI & Models",
-            "Batch Fleet Analysis": "Batch Fleet Analysis",
-            "Fleet Alerts": "Fleet Alerts",
-        }
-
-        selected = st.radio(
-            "Navigation",
-            list(pages.keys()),
-            label_visibility="collapsed",
-        )
-        st.session_state.current_page = pages[selected]
-
-        st.markdown("<hr style='border-color: #232d3f;'>", unsafe_allow_html=True)
-
-        # System info — dynamic
-        has_upload = "uploaded_dataset" in st.session_state
-        upload_indicator = (
-            f'<div style="color: #10b981; font-weight: 600;">📂 Custom Batch Data</div>'
-            if has_upload else
-            f'<div style="color: #94a3b8;">📦 Production Fleet Telemetry</div>'
+            """,
+            unsafe_allow_html=True,
         )
 
-        st.markdown(f"""
-        <div style="font-size: 0.72rem; color: #64748b; padding: 0 4px;">
-            <div style="margin-bottom: 8px;">
-                <strong style="color: #cbd5e1;">SYSTEM TELEMETRY</strong>
-            </div>
-            <div style="margin-bottom: 4px;">🟢 <strong>Engine Status</strong>: Active</div>
-            <div style="margin-bottom: 4px;">{upload_indicator}</div>
-            <div style="margin-bottom: 4px;">⚡ <strong>Explainability</strong>: SHAP v{shap_ver}</div>
-            <div style="margin-top: 12px; padding-top: 8px; border-top: 1px solid #1e293b;">
-                <span style="color: #94a3b8;">System Version</span>: v3.0.0 Pro
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        selected = st.radio("Navigation", list(PAGES), label_visibility="collapsed")
+        st.session_state.current_page = selected
 
-        st.markdown("<hr style='border-color: #232d3f;'>", unsafe_allow_html=True)
-        if st.button("❓ User Guide & Quick Tutorial", use_container_width=True):
-            st.session_state.show_tutorial = True
+        st.markdown("<hr>", unsafe_allow_html=True)
 
-        with st.expander("🗄️ Connect External Database"):
-            st.markdown("<div style='font-size:0.75rem; color:#94a3b8;'>Connect enterprise databases for real-time telemetry streaming:</div>", unsafe_allow_html=True)
-            db_type = st.selectbox("Database Type", ["PostgreSQL", "MySQL", "SQLite", "MongoDB", "Snowflake", "Oracle"], key="sidebar_db_type")
-            conn_str = st.text_input("Connection URI", placeholder="postgresql://user:pass@localhost:5432/mydb", key="sidebar_conn_str")
-            query_str = st.text_input("Table / SQL Query", value="SELECT * FROM telemetry_data LIMIT 1000", key="sidebar_query_str")
-            if st.button("Connect & Sync", key="sidebar_db_btn"):
-                if conn_str:
+        # --- live system panel, read from the artifacts rather than hardcoded
+        model_name = "—"
+        profile = "—"
+        if artifacts_ready:
+            try:
+                artifacts, _ = load_artifacts()
+                model_name = artifacts.get("best_model_name", "—")
+                profile = artifacts.get("training_profile", "full pipeline")
+            except Exception:
+                artifacts_ready = False
+
+        if artifacts_ready:
+            engine_pill = render_pill("Online", "good")
+        else:
+            engine_pill = render_pill("No model", "critical")
+
+        source_pill = (
+            render_pill("Uploaded batch", "accent")
+            if "uploaded_dataset" in st.session_state
+            else render_pill("Plant telemetry", "neutral")
+        )
+
+        st.markdown(
+            '<div style="font-size: 0.66rem; font-weight: 600; color: var(--ink-muted); '
+            'text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px;">'
+            "System</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            render_kv_rows(
+                {
+                    "Engine": engine_pill,
+                    "Data source": source_pill,
+                    "Model": f'<span style="font-size:0.74rem;">{model_name}</span>',
+                    "Profile": f'<span style="font-size:0.74rem;">{profile}</span>',
+                    "SHAP": f'<span style="font-size:0.74rem;">{_package_version("shap")}</span>',
+                }
+            ),
+            unsafe_allow_html=True,
+        )
+
+        st.markdown("<hr>", unsafe_allow_html=True)
+
+        if st.button("How to use this platform", use_container_width=True):
+            st.session_state.show_guide = True
+
+        with st.expander("Connect a database"):
+            st.caption("Stream telemetry from an existing plant historian or warehouse.")
+            db_type = st.selectbox(
+                "Engine",
+                ["PostgreSQL", "MySQL", "SQLite", "MongoDB", "Snowflake", "Oracle"],
+                key="sidebar_db_type",
+            )
+            conn_str = st.text_input(
+                "Connection URI",
+                placeholder="postgresql://user:pass@host:5432/plant",
+                key="sidebar_conn_str",
+            )
+            query_str = st.text_input(
+                "Table or query",
+                value="SELECT * FROM telemetry LIMIT 1000",
+                key="sidebar_query_str",
+            )
+            if st.button("Connect and sync", key="sidebar_db_btn", use_container_width=True):
+                if not conn_str.strip():
+                    st.warning("Enter a connection URI first.")
+                else:
                     try:
                         from src.data.loader import load_from_database
+
                         df_db = load_from_database(db_type, conn_str, query_str)
                         st.session_state.uploaded_dataset = df_db
-                        st.success(f"Connected to {db_type}! Loaded {len(df_db)} records.")
+                        st.success(f"Loaded {len(df_db):,} rows from {db_type}.")
                         st.rerun()
-                    except Exception as err:
-                        st.error(f"Connection error: {err}")
-                else:
-                    st.warning("Please enter a valid Connection URI.")
+                    except Exception as exc:
+                        st.error(f"{type(exc).__name__}: {exc}")
 
-        st.markdown("""
-        <div style="margin-top: 20px; font-size: 0.68rem; color: #475569; border: 1px dashed #232d3f; padding: 10px; border-radius: 6px;">
-            ℹ️ <strong>Industrial Telemetry Notice:</strong> Predictions are generated using calibrated ensemble models. Verify physical equipment prior to maintenance interventions.
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(
+            '<div style="margin-top: 18px; font-size: 0.68rem; color: var(--ink-muted); '
+            "border: 1px solid var(--border); border-radius: 4px; padding: 9px 11px; "
+            'line-height: 1.5;">'
+            "Predictions come from a calibrated statistical model. Confirm the "
+            "physical condition of equipment before acting on a recommendation."
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
 
 # ============================================================================
-# Page Router
+# Guide dialog
 # ============================================================================
 
-@st.dialog("🚀 Welcome to Enterprise APM — Platform User Tutorial", width="large")
-def render_tutorial_dialog():
-    st.markdown("""
-    ### 🛡️ Welcome to your AI Predictive Maintenance Command Center!
-    This quick tutorial will guide you through the key modules and profile navigation so you can get started quickly:
+@st.dialog("How to use this platform", width="large")
+def render_guide_dialog() -> None:
+    """Short orientation covering the workflow, not a feature list."""
+    st.markdown(
+        """
+**The normal workflow is: look at the fleet, then drill into one asset, then act.**
 
-    ---
-    #### 1️⃣ ⚡ **Asset Health Monitor**
-    - High-level executive dashboard showing total fleet health, failure distribution, and active risk alerts.
-    - View health score distribution across your machine inventory.
+| Page | What it answers |
+|:--|:--|
+| **Asset Health** | How is the fleet doing right now, and which assets need attention? |
+| **Risk Assessment** | What is this specific machine's failure probability, and why? |
+| **Data Explorer** | What does the underlying sensor record actually look like? |
+| **Model Diagnostics** | Which sensor readings drive the model's decisions overall? |
+| **Defect Inspection** | Is the product coming off the line within tolerance? |
+| **Model & Cost Analysis** | Which model is best, and what is it worth in currency? |
+| **Batch Analysis** | Score a whole CSV or database table at once. |
+| **Alerts** | What has been flagged this session, and what was recommended? |
 
-    #### 2️⃣ 🎯 **Predictive Risk Assessment**
-    - Perform single-asset real-time diagnosis.
-    - Adjust operational parameters (Temperatures, Rotational Speed, Torque, Tool Wear) to view immediate failure probability and maintenance recommendations.
+**Reading a risk score.** The score is a 0-100 transform of the calibrated
+failure probability. Below 30 is routine, 30-60 warrants a scheduled check,
+60-80 needs intervention this shift, and above 80 means stop and inspect.
 
-    #### 3️⃣ 🧠 **AI Diagnostics & SHAP**
-    - Deep-dive into model explainability.
-    - Understand **WHY** an asset is flagged for maintenance using global & local SHAP feature impact plots.
-
-    #### 4️⃣ 📤 **Batch Fleet Analysis & Database Integration**
-    - Upload custom CSV/Excel telemetry files or connect your external databases (PostgreSQL, MySQL, SQLite, Snowflake, MongoDB).
-    - Run batch predictions across thousands of assets simultaneously with standard column auto-mapping.
-
-    #### 5️⃣ 🔔 **Fleet Alerts & Financial ROI**
-    - Review critical threshold alerts and evaluate the financial ROI ($ savings) from prevented unplanned downtime.
-
-    ---
-    💡 *Tip: You can re-open this tutorial anytime from the sidebar standard menu!*
-    """)
-    if st.button("Got it! Let's get started", use_container_width=True, type="primary"):
-        st.session_state.show_tutorial = False
-        st.session_state.tutorial_seen = True
+**Reading a SHAP value.** A positive value pushed the prediction toward failure,
+a negative one away from it. The magnitude is how hard it pushed. Every single
+prediction carries its own breakdown, so a recommendation always has a stated
+reason behind it.
+        """
+    )
+    if st.button("Close", type="primary", use_container_width=True):
+        st.session_state.show_guide = False
         st.rerun()
 
-def main():
-    """Main application — routes to selected page."""
-    render_sidebar()
 
-    if st.session_state.get("show_tutorial", False):
-        render_tutorial_dialog()
+# ============================================================================
+# Router
+# ============================================================================
+
+def main() -> None:
+    """Route to the selected page, handling the cold start first."""
+    from src.models.baseline import artifacts_present
+
+    try:
+        artifacts_ready = artifacts_present(load_config_only(), project_root)
+    except Exception as exc:
+        st.error(f"Configuration could not be loaded: {exc}")
+        return
+
+    render_sidebar(artifacts_ready)
+
+    if not artifacts_ready:
+        render_cold_start()
+        return
+
+    if st.session_state.get("show_guide", False):
+        render_guide_dialog()
 
     page = st.session_state.current_page
 
     try:
-        if page == "Asset Health Monitor":
+        if page == "Asset Health":
             from app.pages.executive_overview import render_page
+
             render_page(project_root, load_artifacts, load_raw_dataset, load_results_json)
 
-        elif page == "Predictive Risk Assessment":
+        elif page == "Risk Assessment":
             from app.pages.risk_predictor import render_page
+
             render_page(project_root, load_artifacts, load_raw_dataset)
 
-        elif page == "AI Diagnostics & SHAP":
+        elif page == "Data Explorer":
+            from app.pages.data_explorer import render_page
+
+            render_page(project_root, load_raw_dataset)
+
+        elif page == "Model Diagnostics":
             from app.pages.explainable_ai import render_page
+
             render_page(project_root, load_artifacts, load_raw_dataset, load_results_json)
 
-        elif page == "False Ceiling Defect Inspection":
+        elif page == "Defect Inspection":
             from app.pages.ceiling_inspection import render_page
+
             render_page(project_root, load_artifacts, load_raw_dataset)
 
-        elif page == "Financial ROI & Models":
+        elif page == "Model & Cost Analysis":
             from app.pages.model_comparison import render_page
+
             render_page(project_root, load_artifacts, load_results_json, load_raw_dataset)
 
-        elif page == "Batch Fleet Analysis":
+        elif page == "Batch Analysis":
             from app.pages.upload_predict import render_page
+
             render_page(project_root, load_artifacts, load_raw_dataset)
 
-        elif page == "Fleet Alerts":
+        elif page == "Alerts":
             from app.pages.monitoring_alerts import render_page
+
             render_page(project_root)
 
-    except FileNotFoundError as e:
-        st.error(f"""
-        **Model artifacts not found.** Please run the training pipeline first:
+    except FileNotFoundError as exc:
+        st.markdown(
+            render_notice(
+                "Artifacts missing",
+                f"A required file could not be found: <code>{exc}</code>. "
+                "Re-run <code>python scripts/train_pipeline.py</code>.",
+                "critical",
+            ),
+            unsafe_allow_html=True,
+        )
+    except Exception as exc:
+        st.markdown(
+            render_notice(
+                f"{type(exc).__name__} on the {page} page",
+                str(exc),
+                "critical",
+            ),
+            unsafe_allow_html=True,
+        )
+        with st.expander("Technical detail"):
+            import traceback
 
-        ```bash
-        python scripts/train_pipeline.py
-        ```
+            st.code(traceback.format_exc(), language="python")
 
-        Error: {e}
-        """)
-    except Exception as e:
-        st.error(f"An error occurred: {e}")
-        st.info("Please check the logs or try refreshing the page.")
+    st.markdown(
+        render_footer(
+            "Predictive maintenance and inspection platform",
+            f"Session started {datetime.now().strftime('%d %b %Y, %H:%M')}",
+        ),
+        unsafe_allow_html=True,
+    )
+
 
 if __name__ == "__main__":
     main()

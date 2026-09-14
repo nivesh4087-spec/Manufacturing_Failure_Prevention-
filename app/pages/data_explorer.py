@@ -10,39 +10,37 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
-from app.components.styles import render_header_banner
+from app.components.data_access import active_dataset
+from app.components.styles import (
+    SERIES,
+    TOKENS,
+    plotly_layout,
+    render_masthead,
+    render_notice,
+    render_stat_tile,
+)
 
 
 def render_page(project_root, load_dataset_fn):
     """Render the Data Explorer page."""
 
-    st.markdown(render_header_banner(
-        "Data Explorer",
-        "Interactive exploration of the manufacturing sensor dataset"
-    ), unsafe_allow_html=True)
-
-    # Dataset source selection
-    has_uploaded = "uploaded_dataset" in st.session_state
-    if has_uploaded:
-        source = st.radio(
-            "Select Dataset",
-            ["📦 Built-in (AI4I 2020)", f"📂 Uploaded ({st.session_state.get('uploaded_filename', 'file')})"],
-            horizontal=True,
-        )
-        use_uploaded = "Uploaded" in source
-    else:
-        use_uploaded = False
-
-    # Load dataset
     try:
-        if use_uploaded:
-            df = st.session_state["uploaded_dataset"]
-            st.success(f"🔍 Exploring uploaded dataset: **{st.session_state.get('uploaded_filename', 'unknown')}** ({len(df):,} rows)")
-        else:
-            df = load_dataset_fn()
-    except Exception as e:
-        st.error(f"Failed to load dataset: {e}")
+        df, source_label = active_dataset(load_dataset_fn)
+    except Exception as exc:
+        st.markdown(
+            render_notice("Dataset unavailable", str(exc), "critical"), unsafe_allow_html=True
+        )
         return
+
+    st.markdown(
+        render_masthead(
+            "Data Explorer",
+            "The raw sensor record behind every prediction — distributions, "
+            "relationships and the failure modes recorded alongside them.",
+            f"{source_label}<br>{len(df):,} rows &times; {len(df.columns)} columns",
+        ),
+        unsafe_allow_html=True,
+    )
 
     # Detect available columns dynamically
     all_columns = list(df.columns)
@@ -52,7 +50,7 @@ def render_page(project_root, load_dataset_fn):
     # Check if standard target column exists
     target_col = target_col_default if target_col_default in df.columns else None
 
-    tabs = st.tabs(["📋 Dataset Overview", "📊 Feature Analysis", "🔗 Correlations", "🎛️ Interactive Filter"])
+    tabs = st.tabs(["Overview", "Distributions", "Correlations", "Filter"])
 
 
     # ========================================================================
@@ -60,26 +58,50 @@ def render_page(project_root, load_dataset_fn):
     # ========================================================================
 
     with tabs[0]:
+        missing = int(df.isnull().sum().sum())
+        duplicates = int(df.duplicated().sum())
+
         c1, c2, c3, c4 = st.columns(4)
         with c1:
-            st.metric("Total Records", f"{len(df):,}")
+            st.markdown(
+                render_stat_tile("Records", f"{len(df):,}", source_label, "neutral"),
+                unsafe_allow_html=True,
+            )
         with c2:
-            st.metric("Features", f"{len(df.columns)}")
+            st.markdown(
+                render_stat_tile("Columns", str(len(df.columns)), "Including labels", "neutral"),
+                unsafe_allow_html=True,
+            )
         with c3:
-            st.metric("Missing Values", f"{df.isnull().sum().sum()}")
+            st.markdown(
+                render_stat_tile(
+                    "Missing values", f"{missing:,}",
+                    "Complete record" if not missing else "Needs imputation",
+                    "good" if not missing else "warning",
+                ),
+                unsafe_allow_html=True,
+            )
         with c4:
-            st.metric("Duplicates", f"{df.duplicated().sum()}")
+            st.markdown(
+                render_stat_tile(
+                    "Duplicate rows", f"{duplicates:,}",
+                    "None found" if not duplicates else "Review before training",
+                    "good" if not duplicates else "warning",
+                ),
+                unsafe_allow_html=True,
+            )
+        st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
 
-        st.markdown("### Dataset Sample")
+        st.markdown("#### Sample rows")
         st.dataframe(df.head(20), use_container_width=True, hide_index=True)
 
-        st.markdown("### Statistical Summary")
+        st.markdown("#### Statistical summary")
         st.dataframe(
             df.describe().round(3).T,
             use_container_width=True,
         )
 
-        st.markdown("### Data Types")
+        st.markdown("#### Column inventory")
         dtype_df = pd.DataFrame({
             "Column": df.columns,
             "Type": [str(t) for t in df.dtypes],
@@ -96,60 +118,80 @@ def render_page(project_root, load_dataset_fn):
     with tabs[1]:
         target_col = "Machine failure"
 
-        st.markdown("### Feature Distributions by Failure Status")
+        st.caption(
+            "Each reading split by whether the asset went on to fail. Where the "
+            "two distributions separate, the sensor carries signal."
+        )
 
         numerical_cols = [
             "Air temperature [K]", "Process temperature [K]",
             "Rotational speed [rpm]", "Torque [Nm]", "Tool wear [min]"
         ]
 
-        for col in numerical_cols:
-            if col not in df.columns:
-                continue
+        available = [c for c in numerical_cols if c in df.columns]
+        chosen = st.multiselect(
+            "Readings to show", available, default=available[:2], key="de_dist_cols"
+        )
 
+        for col in chosen:
+            st.markdown('<div class="panel">', unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="panel-head"><div class="panel-title">{col}</div></div>',
+                unsafe_allow_html=True,
+            )
             fig = go.Figure()
-            for label, color, name in [(0, "#22c55e", "No Failure"), (1, "#ef4444", "Failure")]:
-                subset = df[df[target_col] == label][col]
+            for label, color, name in [
+                (0, SERIES[0], "Ran normally"),
+                (1, TOKENS["critical"], "Failed"),
+            ]:
                 fig.add_trace(go.Histogram(
-                    x=subset, name=name, marker_color=color,
-                    opacity=0.6, nbinsx=40,
+                    x=df[df[target_col] == label][col],
+                    name=name,
+                    marker_color=color,
+                    marker_line_width=0,
+                    opacity=0.65,
+                    nbinsx=40,
+                    histnorm="probability density",
                 ))
-
             fig.update_layout(
-                title=f"{col} — Distribution by Failure Status",
-                title_font=dict(size=14, color="#e2e8f0"),
-                barmode="overlay",
-                height=300,
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#94a3b8"),
-                xaxis_title=col,
-                yaxis_title="Count",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                margin=dict(t=50, b=30),
+                **plotly_layout(
+                    height=260,
+                    show_legend=True,
+                    x_title=col,
+                    y_title="Density",
+                    barmode="overlay",
+                    bargap=0.04,
+                )
             )
             st.plotly_chart(fig, use_container_width=True)
+            st.markdown("</div>", unsafe_allow_html=True)
 
-        # Boxplots
-        st.markdown("### Feature Boxplots by Failure Status")
-        selected_feat = st.selectbox("Select feature for boxplot:", numerical_cols)
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="panel-head"><div class="panel-title">Spread comparison</div>'
+            '<div class="panel-note">Median, quartiles and outliers</div></div>',
+            unsafe_allow_html=True,
+        )
+        selected_feat = st.selectbox("Reading", available, key="de_box_feat")
         if selected_feat in df.columns:
+            labelled = df.assign(
+                _outcome=df[target_col].map({0: "Ran normally", 1: "Failed"})
+            )
             fig = px.box(
-                df, x=target_col, y=selected_feat,
-                color=target_col,
-                color_discrete_map={0: "#22c55e", 1: "#ef4444"},
-                labels={target_col: "Machine Failure", selected_feat: selected_feat},
+                labelled, x="_outcome", y=selected_feat, color="_outcome",
+                color_discrete_map={
+                    "Ran normally": SERIES[0], "Failed": TOKENS["critical"]
+                },
+                category_orders={"_outcome": ["Ran normally", "Failed"]},
             )
             fig.update_layout(
-                height=350,
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#94a3b8"),
+                **plotly_layout(height=320, x_title=None, y_title=selected_feat)
             )
             st.plotly_chart(fig, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
         # Failure type breakdown
-        st.markdown("### Failure Type Breakdown")
+        st.markdown("#### Recorded failure modes")
         failure_cols = ["TWF", "HDF", "PWF", "OSF", "RNF"]
         failure_counts = {
             "Tool Wear Failure (TWF)": int(df["TWF"].sum()) if "TWF" in df.columns else 0,
@@ -163,83 +205,124 @@ def render_page(project_root, load_dataset_fn):
             x=list(failure_counts.values()),
             y=list(failure_counts.keys()),
             orientation="h",
-            marker_color=["#f97316", "#ef4444", "#8b5cf6", "#3b82f6", "#64748b"],
+            # One hue: these are five slices of the same quantity, not five
+            # independent series, so magnitude carries the meaning.
+            marker_color=SERIES[0],
+            marker_line_width=0,
             text=[str(v) for v in failure_counts.values()],
             textposition="outside",
+            textfont=dict(size=11, color=TOKENS["ink_secondary"]),
+            hovertemplate="%{y}: %{x} events<extra></extra>",
         ))
         fig.update_layout(
-            title="Failure Type Distribution",
-            title_font=dict(size=14, color="#e2e8f0"),
-            height=300,
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#94a3b8"),
-            xaxis_title="Count",
-            margin=dict(t=50, b=30),
+            **plotly_layout(
+                height=250,
+                x_title="Recorded events",
+                margin=dict(t=8, b=42, l=8, r=46),
+                yaxis=dict(
+                    autorange="reversed",
+                    tickfont=dict(size=11, color=TOKENS["ink_secondary"]),
+                    showgrid=False, showline=False, automargin=True,
+                ),
+            )
         )
         st.plotly_chart(fig, use_container_width=True)
+        st.caption(
+            "These five labels are the recorded root cause of each failure. They "
+            "are held out of training — a model given them would simply read the "
+            "answer instead of learning the sensor signature that precedes it."
+        )
 
     # ========================================================================
     # TAB 3 — Correlations
     # ========================================================================
 
     with tabs[2]:
-        st.markdown("### Feature Correlation Heatmap")
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="panel-head"><div class="panel-title">Correlation matrix</div>'
+            '<div class="panel-note">Pearson, pairwise</div></div>',
+            unsafe_allow_html=True,
+        )
 
-        # Interactive correlation
+        corr = df[available + [target_col]].corr()
+        short = [c.split(" [")[0] for c in corr.columns]
 
-        numerical_df = df[numerical_cols + [target_col]].copy()
-        corr = numerical_df.corr()
-
-        fig = go.Figure(data=go.Heatmap(
+        # Diverging: blue for negative, red for positive, neutral grey at zero.
+        fig = go.Figure(go.Heatmap(
             z=corr.values,
-            x=corr.columns,
-            y=corr.index,
-            colorscale="RdBu_r",
-            zmid=0,
-            text=np.round(corr.values, 3),
+            x=short,
+            y=short,
+            colorscale=[
+                [0.0, "#184f95"], [0.25, "#6da7ec"], [0.5, TOKENS["surface_raised"]],
+                [0.75, "#e07a6a"], [1.0, "#a32a2a"],
+            ],
+            zmid=0, zmin=-1, zmax=1,
+            text=corr.round(2).values,
             texttemplate="%{text}",
-            textfont={"size": 10},
+            textfont={"size": 10, "color": TOKENS["ink"]},
+            hovertemplate="%{y} vs %{x}: %{z:.3f}<extra></extra>",
+            xgap=2, ygap=2,
+            colorbar=dict(
+                thickness=10, len=0.7,
+                tickfont=dict(size=10, color=TOKENS["ink_muted"]),
+                outlinewidth=0,
+            ),
         ))
         fig.update_layout(
-            title="Interactive Correlation Matrix",
-            title_font=dict(size=14, color="#e2e8f0"),
-            height=500,
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#94a3b8"),
+            **plotly_layout(
+                height=430, margin=dict(t=8, b=8, l=8, r=8),
+                xaxis=dict(showgrid=False, showline=False, tickangle=-30,
+                           tickfont=dict(size=10, color=TOKENS["ink_muted"])),
+                yaxis=dict(showgrid=False, showline=False, autorange="reversed",
+                           tickfont=dict(size=10, color=TOKENS["ink_muted"])),
+            )
         )
         st.plotly_chart(fig, use_container_width=True)
+        st.caption(
+            "Torque and rotational speed are strongly negatively correlated — "
+            "the drive trades one against the other to hold power roughly "
+            "constant. That relationship is why their ratio is an engineered feature."
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
 
-        # Scatter plot
-        st.markdown("### Feature Scatter Plot")
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="panel-head"><div class="panel-title">Pairwise view</div>'
+            '<div class="panel-note">Pick any two readings</div></div>',
+            unsafe_allow_html=True,
+        )
         sc1, sc2 = st.columns(2)
         with sc1:
-            x_feat = st.selectbox("X-axis:", numerical_cols, index=3)
+            x_feat = st.selectbox("Horizontal", available, index=min(3, len(available) - 1),
+                                  key="de_x")
         with sc2:
-            y_feat = st.selectbox("Y-axis:", numerical_cols, index=2)
+            y_feat = st.selectbox("Vertical", available, index=min(2, len(available) - 1),
+                                  key="de_y")
 
+        labelled = df.assign(_outcome=df[target_col].map({0: "Ran normally", 1: "Failed"}))
         fig = px.scatter(
-            df, x=x_feat, y=y_feat,
-            color=target_col,
-            color_discrete_map={0: "#22c55e", 1: "#ef4444"},
+            labelled, x=x_feat, y=y_feat, color="_outcome",
+            color_discrete_map={"Ran normally": SERIES[0], "Failed": TOKENS["critical"]},
+            category_orders={"_outcome": ["Ran normally", "Failed"]},
             opacity=0.5,
-            labels={target_col: "Failure"},
         )
+        fig.update_traces(marker=dict(size=5, line=dict(width=0)))
         fig.update_layout(
-            height=400,
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#94a3b8"),
+            **plotly_layout(
+                height=390, show_legend=True, x_title=x_feat, y_title=y_feat,
+                legend_title_text="",
+            )
         )
         st.plotly_chart(fig, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
     # ========================================================================
     # TAB 4 — Interactive Filter
     # ========================================================================
 
     with tabs[3]:
-        st.markdown("### Filter & Explore Dataset")
+        st.caption("Narrow the record down, then export what you selected.")
 
         fcol1, fcol2, fcol3 = st.columns(3)
 
