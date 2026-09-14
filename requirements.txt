@@ -1,6 +1,9 @@
 # ============================================================================
-# Explainable AI-Based Manufacturing Failure Prediction System
-# Python Dependencies
+# Manufacturing Failure Prevention Platform — dependencies
+#
+# xgboost and shap are optional at runtime: the platform detects their absence,
+# logs a warning and continues without them. They are listed because the full
+# training profile uses both.
 # ============================================================================
 
 # Core Data Science
@@ -19,9 +22,8 @@ shap>=0.43.0
 matplotlib>=3.8.0
 seaborn>=0.13.0
 plotly>=5.18.0
-statsmodels>=0.14.0        # required by plotly express trendline="lowess"
 
-# Computer Vision (Automated Optical Inspection page)
+# Computer vision (Defect Inspection page frame rendering)
 opencv-python-headless>=4.8.0
 Pillow>=10.0.0
 
@@ -31,7 +33,7 @@ streamlit>=1.28.0
 # Configuration
 pyyaml>=6.0.0
 
-# External database connectors (sidebar telemetry sync)
+# Database connectors (telemetry import)
 SQLAlchemy>=2.0.0
 
 # Model Serialization
@@ -39,10 +41,6 @@ joblib>=1.3.0
 
 # Testing
 pytest>=7.4.0
-
-# Report generation (scripts/generate_false_ceiling_report.py)
-python-docx>=0.8.11
-reportlab>=4.0.0
 
 # Utilities
 ucimlrepo>=0.0.3
