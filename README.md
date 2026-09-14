@@ -1,338 +1,322 @@
-﻿<div align="center">
+<div align="center">
 
-# 🏭 AI-Powered Predictive Maintenance Platform
+# Manufacturing Failure Prevention Platform
 
-### Smart Ceiling Fan Manufacturing — Failure Prevention & Risk Intelligence
+### Predictive maintenance and defect inspection for a suspended-ceiling systems plant
 
-[![Python 3.12](https://img.shields.io/badge/Python-3.12-blue.svg)](https://python.org)
-[![Streamlit](https://img.shields.io/badge/Streamlit-Dashboard-FF4B4B.svg)](https://streamlit.io)
-[![SHAP](https://img.shields.io/badge/SHAP-Explainability-purple.svg)](https://shap.readthedocs.io)
-[![XGBoost](https://img.shields.io/badge/XGBoost-ML-green.svg)](https://xgboost.readthedocs.io)
-[![scikit-learn](https://img.shields.io/badge/scikit--learn-ML-orange.svg)](https://scikit-learn.org)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://python.org)
+[![Streamlit](https://img.shields.io/badge/Streamlit-dashboard-FF4B4B.svg)](https://streamlit.io)
+[![SHAP](https://img.shields.io/badge/SHAP-explainability-8b5cf6.svg)](https://shap.readthedocs.io)
+[![Tests](https://img.shields.io/badge/tests-132%20passing-0ca30c.svg)](tests/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-*An enterprise predictive maintenance platform that forecasts equipment failures,
-provides explainable risk intelligence via SHAP, and delivers actionable maintenance directives for manufacturing operations.*
+*Predicts machine failures before they happen, explains every prediction, and
+prices the decision — so a maintenance call is backed by a reason and a number.*
 
 </div>
 
 ---
 
-## 📋 Table of Contents
+## What this is
 
-- [Business Value](#-business-value)
-- [Platform Overview](#-platform-overview)
-- [System Architecture](#-system-architecture)
-- [Sensor Data Pipeline](#-sensor-data-pipeline)
-- [Technologies](#-technologies)
-- [Quick Start](#-quick-start)
-- [Installation](#-installation)
-- [Usage](#-usage)
-- [Model Performance](#-model-performance)
-- [Explainable AI](#-explainable-ai)
-- [Dashboard](#-dashboard)
-- [Project Structure](#-project-structure)
-- [Industry Application](#-industry-application)
-- [Authors](#-authors)
+A plant making suspended-ceiling systems runs two connected lines. Line 1 stamps
+and mills the board; Line 2 inspects the finished tile. When Line 1's tooling
+wears past its limit, Line 2 starts rejecting tiles for edge chipping — by which
+point the material and machine time are already spent.
 
+This platform predicts the **machine** condition in order to prevent the
+**product** defect.
+
+```
+  LINE 1  CNC stamping and milling          LINE 2  Finishing and inspection
+  ┌──────────────────────────────┐          ┌──────────────────────────────┐
+  │ spindle, press, tooling      │  tiles   │ optical inspection cell      │
+  │                              │ ───────► │                              │
+  │ sensors: air temp, process   │          │ rejects: edge chipping,      │
+  │ temp, speed, torque, wear    │          │ staining, warp, misalignment │
+  └───────────────┬──────────────┘          └──────────────┬───────────────┘
+                  └────────────────────────────────────────┘
+       worn tooling upstream becomes a rejected tile downstream
+```
+
+**The clearest result we found:** binning the dataset by accumulated tool wear
+shows the failure rate sits flat near 2.3% until about **200 minutes**, then
+climbs to 13.8% and beyond. Replacing tooling at that point would have avoided
+**44 of 46 tool-wear failures (96%)**. That interval is derived from the data at
+runtime, not asserted — it moves if the data moves.
 
 ---
 
-## 💰 Business Value
+## Contents
 
-| Metric | Impact |
-|--------|--------|
-| **Downtime Reduction** | 30-50% reduction in unplanned equipment downtime |
-| **Maintenance Cost Savings** | 10-40% reduction through targeted interventions |
-| **False Alarm Rate** | Minimized unnecessary inspections via precision-tuned models |
-| **Decision Transparency** | Full SHAP-based explainability for every prediction |
-| **ROI** | Built-in financial ROI simulator with configurable cost parameters |
-
-## 🏭 Platform Overview
-
-This platform provides **end-to-end predictive maintenance** for ceiling fan manufacturing operations:
-
-1. **Real-time Risk Assessment** — Input machine sensor data and receive instant failure probability with risk scoring (0-100)
-2. **Explainable Predictions** — Every prediction includes SHAP-powered feature attribution showing exactly which sensor readings drive the risk
-3. **Batch Processing** — Upload CSV/Excel files for fleet-wide failure risk assessment
-4. **Financial ROI Dashboard** — Compare maintenance strategies (reactive vs. preventive vs. AI-predictive) with configurable cost parameters
-5. **Monitoring & Alerts** — Track prediction history, risk trends, and high-risk alerts across sessions
-
-## 🏗️ System Architecture
-
-```
-Production Line / QC Station
-     │
-     ▼
-┌─────────────────────────┐
-│   Streamlit Dashboard    │ ← 7 interactive modules
-│   (Industrial Command    │
-│    Center)               │
-└──────────┬──────────────┘
-           ▼
-┌─────────────────────────┐
-│   Prediction Service     │ ← Cached model loading
-└──────────┬──────────────┘
-           ▼
-┌──────────┬──────────────┬─────────────┐
-│ Prepro-  │ ML Model     │ Probability │
-│ cessing  │ Engine       │ Calibration │
-│ Pipeline │ (XGBoost/RF) │ (Isotonic)  │
-└────┬─────┴──────┬───────┴──────┬──────┘
-     │            │              │
-     ▼            ▼              ▼
-┌─────────┐ ┌──────────┐ ┌─────────────┐
-│ Feature │ │ SHAP     │ │ Risk Score  │
-│ Engine  │ │ Engine   │ │ Engine      │
-└─────────┘ └────┬─────┘ └──────┬──────┘
-                 │              │
-                 ▼              ▼
-         ┌──────────────────────────┐
-         │ Recommendation Engine    │
-         │ (Rule-based + SHAP)      │
-         └──────────────────────────┘
-```
-
-## 🔬 Sensor Data Pipeline
-
-### Feature Engineering (10 derived features)
-
-| Feature | Formula | Industrial Significance |
-|---------|---------|----------------------|
-| `temp_diff` | process_temp − air_temp | Heat dissipation efficiency |
-| `power` | torque × rpm × 2π/60 | Mechanical power output (Watts) |
-| `torque_per_rpm` | torque / rpm | Load efficiency ratio |
-| `strain` | tool_wear × torque | Combined mechanical strain |
-| `power_factor` | torque × rpm | Power approximation |
-| `temp_rpm_interaction` | temp_diff × rpm | Thermal-speed stress |
-| `tool_wear_severity` | Binned wear levels | Non-linear wear threshold |
-| `is_high_torque` | torque > Q75 | High-load operating flag |
-| `is_low_speed` | rpm < Q25 | Low-speed anomaly flag |
-| `overload_indicator` | high torque AND low speed | Overstrain detection |
-
-### ML Models Deployed
-
-| # | Model | Role |
-|---|-------|---------|
-| 1 | Logistic Regression | Interpretable baseline |
-| 2 | Random Forest | Ensemble with feature importance |
-| 3 | XGBoost | High-performance gradient boosting |
-| 4 | HistGradientBoosting | Fast sklearn-native boosting |
-
-### Class Imbalance Handling
-
-The dataset has ~3.4% failure cases. Strategy: `class_weight='balanced'` with comparison to SMOTE (applied to training data only), ensuring the model does not bias toward predicting "no failure."
-
-## 🛠️ Technologies
-
-| Category | Technology |
-|----------|------------|
-| Language | Python 3.12 |
-| ML | scikit-learn, XGBoost |
-| Explainability | SHAP |
-| Imbalance | imbalanced-learn |
-| Dashboard | Streamlit |
-| Visualization | Plotly, Matplotlib, Seaborn |
-| Config | PyYAML |
-| Serialization | Joblib |
-| Testing | pytest |
+- [Quick start](#quick-start)
+- [What it does](#what-it-does)
+- [Results](#results)
+- [The dashboard](#the-dashboard)
+- [How it works](#how-it-works)
+- [Training](#training)
+- [Project layout](#project-layout)
+- [Documentation](#documentation)
+- [Authors](#authors)
 
 ---
 
-## ⚡ Quick Start
+## Quick start
 
 ```bash
-# 1. Clone & enter the repo
 git clone <repository-url>
 cd Manufacturing_Failure_Prevention-
 
-# 2. Install dependencies (Python 3.12 recommended)
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
-# 3. Train models — run once (~5-10 minutes)
-python scripts/train_pipeline.py
-
-# 4. Launch the dashboard
 streamlit run app/main.py
 ```
 
-> **Note:** The AI4I 2020 dataset (`ai4i2020.csv`) is already included in the repository root.
-> The training pipeline locates it automatically — no manual download needed.
+There is no trained model on a fresh clone, and the app says so rather than
+crashing: it offers a **Train baseline model** button that produces a working
+model in about thirty seconds and reloads. You do not need to run anything else
+first.
+
+Prefer the terminal?
+
+```bash
+python scripts/train_pipeline.py --mode baseline   # ~30 seconds
+python scripts/train_pipeline.py --mode fast       # ~5-10 minutes
+python scripts/train_pipeline.py --mode full       # 10-20 minutes
+```
+
+**New here?** [`USER_GUIDE.md`](USER_GUIDE.md) walks through the whole system —
+running it, reading its output, bringing your own data, and extending it.
 
 ---
 
-## 📦 Installation
+## What it does
 
-### Prerequisites
+| Capability | How |
+|:--|:--|
+| Predicts failure from sensor telemetry | Calibrated ensemble, selected on F1 |
+| Explains every prediction | SHAP attribution, global and per-asset |
+| Turns explanations into instructions | Rule engine mapping features to stations |
+| Scores a whole file or database table | Shared batch inference path |
+| Prices the decision | Full cost model with adjustable plant figures |
+| Finds the cost-optimal alert threshold | Threshold sweep over the test split |
+| Links machine health to product quality | Tool-wear interval measured from data |
 
-- Python 3.10+ (3.12 recommended)
-- pip >= 23.0
+---
 
-### Steps
+## Results
 
-```bash
-# Clone the repository
-git clone <repository-url>
-cd Manufacturing_Failure_Prevention-
+Measured on a held-out test split. Regenerate with
+`python scripts/generate_project_report.py`.
 
-# (Recommended) Create a virtual environment
-python -m venv venv
-# Windows:
-venv\Scripts\activate
-# macOS/Linux:
-source venv/bin/activate
+| Model | Precision | Recall | F1 | PR-AUC | ROC-AUC | Brier |
+|:--|--:|--:|--:|--:|--:|--:|
+| **Random Forest** | 0.9583 | 0.9020 | **0.9293** | 0.9417 | 0.9806 | 0.0081 |
+| HistGradientBoosting | 0.8679 | 0.9020 | 0.8846 | 0.9466 | 0.9784 | 0.0055 |
 
-# Install dependencies
-pip install -r requirements.txt
+*Figures above come from the `baseline` training profile. The `full` profile
+searches hyperparameters and includes XGBoost and Logistic Regression.*
+
+In plain terms: of every 51 genuine failures the model catches **46** and misses
+**5**, while raising **2** unnecessary inspections.
+
+**Accuracy is deliberately absent.** With 96.6% of assets running normally, a
+model that always predicts "no failure" scores 96.6% accurate and catches
+nothing. F1 and PR-AUC stay honest under that imbalance.
+
+### What this does not claim
+
+- These scores describe the **AI4I 2020 public dataset**, not a real plant. The
+  pipeline ingests real telemetry and has been exercised end to end, but live
+  performance must be re-measured after deployment.
+- The risk score is an engineering design choice, not a physical quantity.
+- SHAP explains what drove the model. That is not proof of physical causation.
+- The split is random, not chronological — the dataset has no reliable time
+  ordering. On live data a time-based split would be the honest test.
+
+---
+
+## The dashboard
+
+Eight modules, in the order you would normally use them.
+
+| Page | The question it answers |
+|:--|:--|
+| **Asset Health** | How is the fleet doing, and what needs attention? |
+| **Risk Assessment** | What is this machine's failure risk, and why? |
+| **Data Explorer** | What does the underlying sensor record look like? |
+| **Model Diagnostics** | What drives the model's decisions? |
+| **Defect Inspection** | Is the product within tolerance, and what upstream cause explains a reject? |
+| **Model & Cost Analysis** | Which model, and what is it worth in currency? |
+| **Batch Analysis** | Score a whole file, table or database query |
+| **Alerts** | What was flagged this session, and what was recommended? |
+
+### Reading a risk score
+
+| Score | Band | Action |
+|:--|:--|:--|
+| 0-30 | Routine | Normal schedule |
+| 30-60 | Moderate | Check at the next planned stop |
+| 60-80 | High | Intervene this shift |
+| 80-100 | Critical | Stop and inspect |
+
+Band edges are configurable in `config/config.yaml`.
+
+---
+
+## How it works
+
+```
+  telemetry ──► validation ──► feature engineering ──► calibrated model
+   (file,         (schema,        (5 derived            (selected on F1,
+    database,      range,          features)             isotonic calibration)
+    stream)        balance)                                      │
+                                                                 ▼
+                                              ┌──────────────────────────────┐
+                                              │ probability ──► risk score   │
+                                              │      │              │        │
+                                              │      ▼              ▼        │
+                                              │   SHAP          risk band    │
+                                              │      │              │        │
+                                              │      └──────┬───────┘        │
+                                              │             ▼                │
+                                              │   ranked maintenance action  │
+                                              └──────────────────────────────┘
 ```
 
-## 🚀 Usage
+### Engineered features
 
-### 1. Train the ML Pipeline
+| Feature | Formula | What it captures |
+|:--|:--|:--|
+| Thermal margin | process temp − air temp | Whether heat is leaving the machine |
+| Mechanical power | torque × speed × 2π ÷ 60 | Work actually done at the cut |
+| Load per unit speed | torque ÷ speed | Whether the drive is straining |
+| Accumulated strain | tool wear × torque | Cumulative stress on the tooling |
+| Thermal-speed stress | thermal margin × speed | Heat generated at operating speed |
+
+Plus binned wear severity and high-torque / low-speed / overload flags.
+
+None of these adds information — each combines readings the model already has.
+They help because a decision tree needs many splits to approximate a ratio or a
+product, and stating it directly costs none.
+
+### Models
+
+Logistic Regression (interpretable baseline), Random Forest, XGBoost, and
+HistGradientBoosting. XGBoost and SHAP are **optional** — if either is missing
+the pipeline logs a warning, skips it, and continues with the rest.
+
+### Class imbalance
+
+The dataset is 3.4% failures. Handled with `class_weight="balanced"`, with SMOTE
+available as a configurable alternative applied to training data only.
+
+---
+
+## Training
+
 ```bash
-python scripts/train_pipeline.py
+python scripts/train_pipeline.py --mode full
 ```
-This will:
-- Load and validate the manufacturing sensor dataset
-- Preprocess data and engineer features
-- Train 4 models with hyperparameter optimization
-- Evaluate, compare, and select the best model
-- Calibrate probabilities for reliable risk estimates
-- Generate SHAP explanations and plots
-- Save all artifacts to `models/`
 
-> **First run:** The pipeline auto-creates `models/`, `reports/figures/`, and `reports/results/` directories.
+Load and validate → engineer features → split → hyperparameter search per model
+→ select on F1 → calibrate probabilities → evaluate on the held-out split →
+compute SHAP → ablation study → save artifacts and figures.
 
-### 2. Launch the Dashboard
+| Flag | Effect |
+|:--|:--|
+| `--mode baseline` | Fixed hyperparameters, ~30 seconds |
+| `--mode fast` | Small search, capped grids and workers |
+| `--mode full` | The configured search (default) |
+| `--skip-plots` | No figure generation |
+| `--skip-shap` | Skip SHAP, which dominates runtime |
+
+Outputs land in `models/`, `reports/figures/` and `reports/results/`, all of
+which are gitignored build output — one command regenerates them.
+
+### Reports
+
 ```bash
-streamlit run app/main.py
+python scripts/generate_project_report.py    # FALSE_CEILING_PROJECT_REPORT.md
+python scripts/generate_project_figures.py   # analysis figures
 ```
 
-### 3. Run Tests
-```bash
-python -m pytest tests/ -v
-```
+Both compute their numbers from the trained artifacts. If no model exists they
+stop with an error rather than filling in a figure.
 
-## 📈 Model Performance
+---
 
-Results are generated by the training pipeline and saved to `reports/results/`.
-
-### Model Selection
-- **Primary Metric**: F1-Score (balances precision and recall for failure detection)
-- **Secondary Metric**: PR-AUC (robust to class imbalance, unlike ROC-AUC)
-- **Accuracy is NOT used** as the primary metric due to severe class imbalance (~96.6% majority class)
-
-## 🔍 Explainable AI
-
-### Global Explainability
-- **SHAP Summary Plot**: Shows how each sensor reading impacts failure prediction across the entire fleet
-- **SHAP Feature Importance**: Ranks features by average absolute SHAP value
-- **Contribution Analysis**: Quantified percentage contribution of each feature
-
-### Local Explainability
-For each individual prediction:
-- **SHAP Waterfall**: Shows exactly which readings push risk up or down
-- **Plain-English Explanation**: "High tool wear (200 min) increases failure risk"
-- **Actionable Recommendations**: Targeted maintenance directives
-
-### Risk Score System
-
-| Score | Category | Recommended Action |
-|-------|----------|-----------| 
-| 0-30 | 🟢 LOW RISK | Continue routine monitoring |
-| 31-60 | 🟡 MODERATE RISK | Schedule next-window inspection |
-| 61-80 | 🟠 HIGH RISK | Prioritize maintenance intervention |
-| 81-100 | 🔴 CRITICAL RISK | Immediate maintenance required |
-
-## 🖥️ Dashboard
-
-7-module professional industrial command center:
-
-| Module | Description |
-|--------|-------------|
-| 📊 Asset Health Monitor | KPIs, fleet health overview, risk distribution, active alerts |
-| 🎯 Predictive Risk Assessment | Manual sensor input, demo scenarios, risk gauge, SHAP explanation |
-| 🧠 AI Diagnostics & SHAP | Global SHAP plots, local explanations, industry context |
-| 🔍 False Ceiling Defect Inspection | Defect analysis for ceiling fan manufacturing QC |
-| 💰 Financial ROI & Models | Metrics table, ROC/PR curves, cost analysis, ROI simulator |
-| 📤 Batch Fleet Analysis | CSV/Excel upload + DB integration for fleet-wide predictions |
-| 🔔 Fleet Alerts | Prediction history, alert feed, risk timeline |
-
-## 📁 Project Structure
+## Project layout
 
 ```
 Manufacturing_Failure_Prevention-/
-├── config/
-│   └── config.yaml              # Central configuration (all tunable params)
-├── data/
-│   ├── raw/                     # Raw sensor data (auto-downloaded or manual)
-│   └── processed/               # Processed data cache
-├── src/
-│   ├── data/
-│   │   ├── loader.py            # Dataset loading & DB connectors
-│   │   └── validator.py         # Schema & quality validation
-│   ├── preprocessing/
-│   │   └── pipeline.py          # Cleaning, encoding, scaling
-│   ├── features/
-│   │   └── engineer.py          # Feature engineering (10 derived features)
-│   ├── models/
-│   │   └── trainer.py           # Training, HPO, calibration
-│   ├── evaluation/
-│   │   └── evaluator.py         # Metrics & plots
-│   ├── explainability/
-│   │   └── shap_engine.py       # SHAP global/local explanations
-│   ├── risk/
-│   │   └── scoring.py           # Risk score & early warning system
-│   └── recommendations/
-│       └── engine.py            # Rule-based maintenance recommendations
 ├── app/
-│   ├── main.py                  # Streamlit entry point
+│   ├── main.py                  entry point, sidebar, router, cold start
 │   ├── components/
-│   │   └── styles.py            # Industrial CSS theme
-│   └── pages/                   # 7 dashboard modules
-│       ├── executive_overview.py
-│       ├── risk_predictor.py
-│       ├── explainable_ai.py
-│       ├── ceiling_inspection.py
-│       ├── model_comparison.py
-│       ├── upload_predict.py
-│       └── monitoring_alerts.py
-├── models/                      # Saved model artifacts (auto-generated)
-├── reports/
-│   ├── figures/                 # Generated plots (auto-generated)
-│   └── results/                 # Metrics & JSON results (auto-generated)
-├── tests/                       # Unit test suite
-├── scripts/
-│   └── train_pipeline.py        # End-to-end training orchestrator
-├── requirements.txt
-├── README.md
-├── CONTRIBUTING.md
-└── .gitignore
+│   │   ├── styles.py            design tokens, components, Plotly theme
+│   │   └── data_access.py       cached expensive operations
+│   └── pages/                   one module per dashboard page
+├── src/
+│   ├── data/                    loading, database connectors, validation
+│   ├── preprocessing/           splitting, scaling, encoding
+│   ├── features/                engineered features
+│   ├── models/                  training, baseline, persistence
+│   ├── inference/               shared batch scoring
+│   ├── evaluation/              metrics and evaluation plots
+│   ├── explainability/          SHAP engine
+│   ├── risk/                    scoring, banding, session history
+│   ├── recommendations/         rule engine
+│   └── reporting/               report metric collection
+├── scripts/                     training, report and figure generation
+├── config/config.yaml           central configuration
+├── tests/                       132 tests
+└── reports/                     generated figures and results
 ```
 
-> **`models/`** and **`reports/`** directories are created automatically on first `train_pipeline.py` run.
+---
 
-## 🏭 Industry Application — Ceiling Fan Manufacturing
+## Documentation
 
-| Sensor / Feature | Manufacturing Context |
-|-----------------|----------------------|
-| Air Temperature | Ambient factory floor temperature |
-| Process Temperature | Motor winding / assembly station temperature |
-| Rotational Speed | Fan motor test RPM during quality check |
-| Torque | Motor shaft torque during blade assembly |
-| Tool Wear | Pressing/cutting tool wear in blade stamping |
-| Product Type (L/M/H) | Product quality tier (Economy/Standard/Premium) |
+| Document | For |
+|:--|:--|
+| [`USER_GUIDE.md`](USER_GUIDE.md) | Running, using and extending the system |
+| [`FALSE_CEILING_PROJECT_REPORT.md`](FALSE_CEILING_PROJECT_REPORT.md) | Project status, generated from measured results |
+| [`FINAL_PROJECT_AGILE_KANBAN_SUBMISSION.md`](FINAL_PROJECT_AGILE_KANBAN_SUBMISSION.md) | Agile process and sprint tracking |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Contribution workflow |
 
-## 👤 Authors
+---
 
-- **Nivesh** — AI/ML Platform Engineer
+## Tests
+
+```bash
+python -m pytest tests/ -q
+```
+
+Covering data loading, preprocessing, feature formulas, risk scoring, the
+recommendation rules, the batch inference path, the tool-wear interval
+derivation, training mode presets, and malformed-input handling.
+
+---
+
+## Authors
+
+VIT Pune
+
+| Member | Responsibility |
+|:--|:--|
+| **Nivesh Manoj Jain** | ML architecture and pipeline |
+| **Hasan Rupawalla** | Computer vision and inspection |
+| **Rachit Ingole** | Telemetry ingestion and data |
+
+Dataset: [AI4I 2020 Predictive Maintenance](https://archive.ics.uci.edu/dataset/601/ai4i+2020+predictive+maintenance+dataset),
+UCI Machine Learning Repository.
 
 ---
 
 <div align="center">
 
-*AI-Powered Predictive Maintenance Platform for Industrial Manufacturing*
-
-**"Predict risk early. Explain the factors. Act before failure."**
+**Predict early. Explain the reason. Act before it breaks.**
 
 </div>
