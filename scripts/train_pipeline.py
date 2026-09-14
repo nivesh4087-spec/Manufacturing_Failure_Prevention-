@@ -65,7 +65,24 @@ logger = logging.getLogger("TrainPipeline")
 #: configuration; fast trades breadth for turnaround so a code change can be
 #: checked without waiting out a thousand model fits.
 MODE_PRESETS = {
-    "fast": {"n_iter": 6, "cv_folds": 3, "calibration_folds": 3},
+    "fast": {
+        "n_iter": 6,
+        "cv_folds": 3,
+        "calibration_folds": 3,
+        # Capping the search space matters as much as capping the iteration
+        # count: a single 500-tree forest dominates the runtime, so without
+        # this the "fast" profile is not fast on a modest machine.
+        "grid_caps": {
+            "n_estimators": 200,
+            "max_iter": 200,
+        },
+        # n_jobs=-1 spawns one worker per core, and each loads its own copy of
+        # the scientific stack. On a 16-core laptop that is several gigabytes
+        # before a single tree is fitted, which trades a wall-clock win for
+        # swap thrashing. Two workers is the safer default for the profile
+        # whose entire purpose is a quick answer.
+        "n_jobs": 2,
+    },
     "full": {},  # use the configuration as written
 }
 
@@ -119,9 +136,23 @@ def apply_mode(config: dict, mode: str) -> dict:
     if "calibration_folds" in preset:
         config["calibration"]["cv_folds"] = preset["calibration_folds"]
 
+    if "n_jobs" in preset:
+        config["hpo"]["n_jobs"] = preset["n_jobs"]
+        for model_config in config["models"].values():
+            if "n_jobs" in model_config.get("params", {}):
+                model_config["params"]["n_jobs"] = preset["n_jobs"]
+
+    for parameter, ceiling in preset.get("grid_caps", {}).items():
+        for model_config in config["models"].values():
+            grid = model_config.get("hyperparam_grid", {})
+            if parameter in grid:
+                capped = sorted({v for v in grid[parameter] if v is not None and v <= ceiling})
+                grid[parameter] = capped or [ceiling]
+
     logger.info(
-        "Mode %s: %d search iterations x %d folds",
+        "Mode %s: %d search iterations x %d folds, %s worker(s)",
         mode, config["hpo"]["n_iter"], config["hpo"]["cv_folds"],
+        config["hpo"]["n_jobs"],
     )
     return config
 

@@ -160,14 +160,17 @@ def cost_facts(
 ) -> Dict[str, Any]:
     """Price the selected model's confusion matrix using the configured costs.
 
-    Scales the held-out test result up to the full fleet so the figure is stated
-    per fleet-year rather than per test split, and records the scaling factor so
-    the arithmetic stays auditable.
+    Deliberately states the result **per dataset** rather than per year. The
+    dataset is a set of production cycles, not a fleet observed for twelve
+    months, so annualising it would require a production-volume assumption the
+    data does not contain. Callers that know their real cycle rate can scale the
+    per-cycle figure themselves; the platform subscription is reported separately
+    for the same reason, since it is the one genuinely annual quantity.
 
     Args:
         artifacts: Loaded model artifacts.
         config: Project configuration, for the ``business`` block.
-        n_assets: Size of the full fleet.
+        n_assets: Number of cycles in the dataset.
 
     Returns:
         The cost comparison, or an empty dict if no confusion matrix is stored.
@@ -191,13 +194,14 @@ def cost_facts(
     scale = n_assets / tested if tested else 1.0
 
     failure_cost = downtime_rate * downtime_hours
+
+    # Stated over the whole dataset: the test split scaled to the full set of
+    # cycles. No time unit is attached, because the data carries none.
     reactive = (tp + fn) * failure_cost * scale
     predictive = (
-        tp * preventive * scale
-        + fp * false_alarm * scale
-        + fn * failure_cost * scale
-        + licence
+        tp * preventive * scale + fp * false_alarm * scale + fn * failure_cost * scale
     )
+    avoided = reactive - predictive
 
     return {
         "unit_failure_cost": failure_cost,
@@ -206,14 +210,20 @@ def cost_facts(
         "preventive_cost": preventive,
         "false_alarm_cost": false_alarm,
         "annual_platform_cost": licence,
+        "cycles": n_assets,
         "test_split_size": tested,
         "scale_factor": round(scale, 2),
         "confusion": {"tn": tn, "fp": fp, "fn": fn, "tp": tp},
         "reactive_cost": round(reactive, 2),
         "predictive_cost": round(predictive, 2),
-        "avoided_cost": round(reactive - predictive, 2),
-        "reduction_pct": round((reactive - predictive) / reactive * 100, 1) if reactive else 0.0,
+        "avoided_cost": round(avoided, 2),
+        "avoided_per_cycle": round(avoided / n_assets, 2) if n_assets else 0.0,
+        "reduction_pct": round(avoided / reactive * 100, 1) if reactive else 0.0,
         "caught_pct": round(tp / (tp + fn) * 100, 1) if (tp + fn) else 0.0,
+        # How many cycles the platform must cover before it pays for itself.
+        "breakeven_cycles": (
+            int(licence / (avoided / n_assets)) if n_assets and avoided > 0 else None
+        ),
     }
 
 

@@ -115,10 +115,16 @@ def build_report(m: Dict[str, Any]) -> str:
 
     if cost:
         add("**The headline number.** Against a run-to-failure baseline, the model "
-            f"avoids an estimated **{money(cost['avoided_cost'])} per year** across "
-            f"{dataset['n_assets']:,} assets — a {cost['reduction_pct']:.0f}% reduction "
-            "in failure-related cost. Section 6 shows the full arithmetic and the "
-            "assumptions it rests on.")
+            f"avoids **{money(cost['avoided_cost'])}** across the "
+            f"{cost['cycles']:,} production cycles in the dataset — a "
+            f"{cost['reduction_pct']:.0f}% reduction in failure-related cost, or "
+            f"about **{money(cost['avoided_per_cycle'])} per cycle**. Section 6 "
+            "shows the arithmetic and states plainly what it assumes.")
+        add("")
+        add("> We quote this per cycle rather than per year on purpose. The dataset "
+            "records production cycles, not a fleet watched for twelve months, so "
+            "an annual figure would need a production-volume assumption the data "
+            "does not contain. Multiply by your own annual cycle count.")
         add("")
 
     add("> **How to read this report.** Section 2 frames the problem, 3 covers the "
@@ -371,23 +377,52 @@ def build_report(m: Dict[str, Any]) -> str:
         add(f"| False alarm | {money(cost['false_alarm_cost'])} |")
         add(f"| Platform running cost | {money(cost['annual_platform_cost'])} per year |")
         add("")
-        add("| Scenario | Annual cost |")
-        add("|:--|--:|")
-        add(f"| Run to failure | {money(cost['reactive_cost'])} |")
-        add(f"| With the model | {money(cost['predictive_cost'])} |")
-        add(f"| **Avoided** | **{money(cost['avoided_cost'])}** |")
+        add(f"| Scenario | Cost over {cost['cycles']:,} cycles | Per cycle |")
+        add("|:--|--:|--:|")
+        add(f"| Run to failure | {money(cost['reactive_cost'])} | "
+            f"{money(cost['reactive_cost'] / cost['cycles'])} |")
+        add(f"| With the model | {money(cost['predictive_cost'])} | "
+            f"{money(cost['predictive_cost'] / cost['cycles'])} |")
+        add(f"| **Avoided** | **{money(cost['avoided_cost'])}** | "
+            f"**{money(cost['avoided_per_cycle'])}** |")
         add("")
-        add(f"That is a **{cost['reduction_pct']:.0f}% reduction** in failure-related "
-            f"cost, with **{cost['caught_pct']:.0f}%** of failures caught before they "
+        add(f"A **{cost['reduction_pct']:.0f}% reduction** in failure-related cost, "
+            f"with **{cost['caught_pct']:.0f}%** of failures caught before they "
             "happen.")
         add("")
-        add(f"**Being explicit about the arithmetic:** these figures scale the "
-            f"{cost['test_split_size']:,}-asset test result up to the full "
-            f"{dataset['n_assets']:,}-asset fleet by a factor of "
-            f"{cost['scale_factor']}, and assume each asset represents one "
-            "failure opportunity per year. The cost inputs are configurable in "
-            "`config/config.yaml` and should be replaced with the plant's real "
-            "figures before this number is quoted anywhere binding.")
+        if cost.get("breakeven_cycles"):
+            add(f"Running the platform costs {money(cost['annual_platform_cost'])} a "
+                f"year, which the model recovers within roughly "
+                f"**{cost['breakeven_cycles']} cycles** at the avoided cost above. "
+                "The subscription is not the deciding factor here; the accuracy of "
+                "the downtime figure is.")
+            add("")
+
+        add("### What this calculation assumes")
+        add("")
+        add("Worth stating, because a manager will and should ask:")
+        add("")
+        add(f"1. **It scales the test split.** The model was scored on "
+            f"{cost['test_split_size']:,} held-out cycles; those results are "
+            f"multiplied by {cost['scale_factor']} to cover all "
+            f"{cost['cycles']:,}. That is valid only if the test split is "
+            "representative, which stratified sampling makes likely but does not "
+            "guarantee.")
+        add("2. **It assumes every predicted failure is preventable.** In reality "
+            "some flagged failures would occur regardless, so the true avoided "
+            "cost is lower than the figure above.")
+        add("3. **It ignores the cost of acting.** Technician time to investigate a "
+            "flag is folded into the planned-intervention figure, which may be "
+            "optimistic.")
+        add("4. **The cost inputs are placeholders.** "
+            f"{money(cost['downtime_rate'])} per hour of downtime and "
+            f"{money(cost['preventive_cost'])} per planned fix are configurable "
+            "defaults, not our plant's measured figures. Replace them in "
+            "`config/config.yaml` before quoting this anywhere binding.")
+        add("")
+        add("The direction of the result is robust — catching failures early is "
+            "worth far more than the inspections it costs — but the magnitude "
+            "should be treated as an order of magnitude until the inputs are real.")
         add("")
         out.extend(figure("cost", "Cost comparison across maintenance strategies"))
 
