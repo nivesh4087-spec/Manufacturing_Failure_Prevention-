@@ -34,9 +34,10 @@ RECOMMENDATION_RULES = {
             "Review tool replacement schedule and adjust if needed.",
         ],
         "priority": "high",
-        "fan_mapping": (
-            "In ceiling fan production: Inspect pressing/cutting tool condition "
-            "in the blade stamping station. Worn tools may produce blade defects."
+        "plant_context": (
+            "Line 1, stamping station: measure the punch and die edge on the "
+            "tile press. Worn tooling is the direct cause of the edge chipping "
+            "and corner cracks that Line 2 inspection rejects."
         ),
     },
     "torque": {
@@ -51,9 +52,10 @@ RECOMMENDATION_RULES = {
             "Reduce operational load if safe to do so.",
         ],
         "priority": "high",
-        "fan_mapping": (
-            "In ceiling fan production: Check motor shaft load during blade assembly. "
-            "Excessive torque may indicate motor binding or misalignment."
+        "plant_context": (
+            "Line 1, press drive: rising torque at the same feed rate means the "
+            "board is resisting the cut. Check for binding in the feed rollers "
+            "and for board density above specification."
         ),
     },
     "temperature": {
@@ -70,9 +72,11 @@ RECOMMENDATION_RULES = {
             "Allow equipment to cool before resuming if overheated.",
         ],
         "priority": "medium",
-        "fan_mapping": (
-            "In ceiling fan production: Check motor winding temperature during "
-            "testing. Excessive heat may indicate insulation degradation or bearing issues."
+        "plant_context": (
+            "Line 1, spindle and drive housing: a narrowing gap between process "
+            "and ambient temperature means heat is not leaving the machine. "
+            "Check coolant flow and extraction before the spindle bearing takes "
+            "damage."
         ),
     },
     "speed": {
@@ -87,9 +91,10 @@ RECOMMENDATION_RULES = {
             "Inspect belt tension and coupling condition.",
         ],
         "priority": "medium",
-        "fan_mapping": (
-            "In ceiling fan production: Monitor motor RPM during quality test. "
-            "Abnormal speed may indicate winding defects or capacitor issues."
+        "plant_context": (
+            "Line 1, spindle speed: a drop against the setpoint points at "
+            "supply instability or mechanical drag. Sustained low speed with "
+            "normal torque leaves a rough cut edge on the tile."
         ),
     },
     "overload": {
@@ -104,9 +109,10 @@ RECOMMENDATION_RULES = {
             "Review operating parameters against manufacturer specifications.",
         ],
         "priority": "critical",
-        "fan_mapping": (
-            "In ceiling fan production: High torque at low speed during motor "
-            "testing suggests overstrain. Check blade balance and motor capacity."
+        "plant_context": (
+            "Line 1, overstrain: high torque at low speed is the signature of a "
+            "stalling cut. Stop the line before the tool shatters and damages "
+            "the die set."
         ),
     },
     "product_type": {
@@ -120,9 +126,10 @@ RECOMMENDATION_RULES = {
             "Consider additional quality inspection for high-risk product types.",
         ],
         "priority": "low",
-        "fan_mapping": (
-            "In ceiling fan production: Different fan models (Economy/Standard/Premium) "
-            "may require different process parameters. Verify correct settings."
+        "plant_context": (
+            "Board grade drives the cutting parameters. Confirm the programme "
+            "loaded matches the grade running - economy mineral fibre and "
+            "premium gypsum need different feed and speed."
         ),
     },
 }
@@ -173,9 +180,9 @@ def generate_recommendations(
             if matches:
                 seen_rules.add(rule_key)
 
-                # Get industry mapping for the feature
-                fan_mapping = config.get("industry_mapping", {}).get(
-                    feature_name, "No specific mapping available."
+                # What this sensor reading means on the shop floor.
+                station_label = config.get("industry_mapping", {}).get(
+                    feature_name, "No station mapping configured."
                 )
 
                 recommendations.append({
@@ -188,8 +195,8 @@ def generate_recommendations(
                     "impact": impact,
                     "shap_importance": factor["abs_importance"],
                     "recommendations": rule["recommendations"],
-                    "fan_manufacturing_note": rule["fan_mapping"],
-                    "industry_mapping": fan_mapping,
+                    "plant_context": rule["plant_context"],
+                    "industry_mapping": station_label,
                 })
 
                 if len(recommendations) >= top_n:
@@ -236,7 +243,7 @@ def format_recommendations_text(
         lines.append(f"   Triggered by: {rec['feature']} → {rec['impact']}")
         for action in rec["recommendations"][:2]:
             lines.append(f"   • {action}")
-        lines.append(f"   📋 Fan Mfg Note: {rec['fan_manufacturing_note']}")
+        lines.append(f"   Plant context: {rec['plant_context']}")
         lines.append("")
 
     lines.append(

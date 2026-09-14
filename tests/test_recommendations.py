@@ -95,10 +95,10 @@ class TestGenerateRecommendations:
                 p2 = priority_order.get(recs[i + 1]["priority"], 99)
                 assert p1 <= p2
 
-    def test_has_fan_mapping(self, high_risk_explanation, config):
+    def test_has_plant_context(self, high_risk_explanation, config):
         recs = generate_recommendations(high_risk_explanation, config)
         for rec in recs:
-            assert "fan_manufacturing_note" in rec
+            assert "plant_context" in rec
 
 
 class TestFormatRecommendations:

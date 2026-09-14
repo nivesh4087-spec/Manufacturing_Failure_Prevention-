@@ -5,9 +5,9 @@
 
 project:
   name: "AI-Powered Predictive Maintenance Platform"
-  version: "2.0.0"
-  description: "Intelligent Failure Prediction & Risk Intelligence for Ceiling Fan Manufacturing Operations"
-  author: "Nivesh"
+  version: "3.0.0"
+  description: "Failure prediction and defect inspection for a suspended ceiling systems plant"
+  author: "Nivesh Manoj Jain, Hasan Rupawalla, Rachit Ingole"
   random_seed: 42
 
 # --- Dataset Configuration ---
@@ -220,24 +220,27 @@ artifacts:
   figures_dir: "reports/figures"
   results_dir: "reports/results"
 
-# --- Ceiling Fan Manufacturing Mapping ---
+# --- Shop-Floor Station Mapping ---
+# Translates a model feature into the thing an engineer would actually walk over
+# and look at. Line 1 is the CNC stamping and milling machinery this model
+# monitors; Line 2 is the tile inspection line downstream of it.
 industry_mapping:
-  "air_temp_k": "Ambient Factory Floor Temperature"
-  "process_temp_k": "Motor Winding / Assembly Station Temperature"
-  "rotational_speed_rpm": "Fan Motor Test RPM During Quality Check"
-  "torque_nm": "Motor Shaft Torque During Blade Assembly"
-  "tool_wear_min": "Pressing/Cutting Tool Wear in Blade Stamping"
-  "type": "Product Quality Tier (Economy/Standard/Premium)"
-  "temp_diff": "Heat Dissipation Between Motor and Ambient"
-  "power": "Motor Power Output During Testing"
-  "torque_per_rpm": "Load Efficiency of Assembly Motor"
-  "strain": "Combined Tool-Mechanical Stress"
-  "power_factor": "Power Approximation During QC Test"
-  "temp_rpm_interaction": "Thermal-Speed Stress on Motor"
-  "tool_wear_severity": "Tool Condition Category"
-  "is_high_torque": "High-Load Assembly Flag"
-  "is_low_speed": "Low-Speed Motor Anomaly Flag"
-  "overload_indicator": "Motor Overstrain Detection"
+  "air_temp_k": "Ambient temperature, Line 1 press hall"
+  "process_temp_k": "Spindle and drive housing temperature, tile press"
+  "rotational_speed_rpm": "Cutting spindle speed"
+  "torque_nm": "Press drive torque during the cut"
+  "tool_wear_min": "Punch and die edge wear, stamping station"
+  "type": "Board grade (economy / standard / premium)"
+  "temp_diff": "Thermal margin between spindle and press hall"
+  "power": "Mechanical power drawn at the cut"
+  "torque_per_rpm": "Cutting load per unit speed"
+  "strain": "Accumulated tool and mechanical stress"
+  "power_factor": "Torque-speed product, drive loading"
+  "temp_rpm_interaction": "Thermal stress at operating speed"
+  "tool_wear_severity": "Tool condition band"
+  "is_high_torque": "High cutting load flag"
+  "is_low_speed": "Spindle underspeed flag"
+  "overload_indicator": "Stalling-cut overstrain flag"
 
 # --- Demo Scenarios ---
 demo_scenarios:
