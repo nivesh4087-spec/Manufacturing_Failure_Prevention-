@@ -15,13 +15,15 @@ Pipeline:
 9. Generate evaluation plots
 
 Usage:
-    python scripts/train_pipeline.py
+    python scripts/train_pipeline.py --mode fast      # minutes, for iterating
+    python scripts/train_pipeline.py --mode full      # the full search, for a release
+    python scripts/train_pipeline.py --mode baseline  # seconds, fixed hyperparameters
 """
 
-import sys
-import os
-import logging
+import argparse
 import json
+import logging
+import sys
 from pathlib import Path
 
 # Add project root to path
@@ -48,7 +50,6 @@ from src.evaluation.evaluator import (
     plot_feature_distributions,
     plot_correlation_heatmap,
 )
-from src.explainability.shap_engine import SHAPEngine
 from src.features.engineer import generate_feature_report
 
 # Configure logging
@@ -60,17 +61,104 @@ logging.basicConfig(
 logger = logging.getLogger("TrainPipeline")
 
 
-def main():
+#: How much search each profile buys. The full profile is the published
+#: configuration; fast trades breadth for turnaround so a code change can be
+#: checked without waiting out a thousand model fits.
+MODE_PRESETS = {
+    "fast": {"n_iter": 6, "cv_folds": 3, "calibration_folds": 3},
+    "full": {},  # use the configuration as written
+}
+
+
+def parse_args(argv=None) -> argparse.Namespace:
+    """Parse the command line."""
+    parser = argparse.ArgumentParser(
+        description="Train, evaluate and persist the failure-prediction models.",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["baseline", "fast", "full"],
+        default="full",
+        help=(
+            "baseline: fixed hyperparameters, about 30 seconds. "
+            "fast: a small randomised search, a few minutes. "
+            "full: the configured search (default)."
+        ),
+    )
+    parser.add_argument(
+        "--skip-plots",
+        action="store_true",
+        help="Skip figure generation. Useful in CI, where nobody looks at them.",
+    )
+    parser.add_argument(
+        "--skip-shap",
+        action="store_true",
+        help="Skip SHAP analysis, which dominates runtime on large models.",
+    )
+    return parser.parse_args(argv)
+
+
+def apply_mode(config: dict, mode: str) -> dict:
+    """Fold a mode preset into the loaded configuration.
+
+    Args:
+        config: The configuration as loaded from YAML.
+        mode: One of the keys in :data:`MODE_PRESETS`.
+
+    Returns:
+        The same dict, mutated, so nothing downstream needs mode awareness.
+    """
+    preset = MODE_PRESETS.get(mode, {})
+    if not preset:
+        return config
+
+    if "n_iter" in preset:
+        config["hpo"]["n_iter"] = preset["n_iter"]
+    if "cv_folds" in preset:
+        config["hpo"]["cv_folds"] = preset["cv_folds"]
+    if "calibration_folds" in preset:
+        config["calibration"]["cv_folds"] = preset["calibration_folds"]
+
+    logger.info(
+        "Mode %s: %d search iterations x %d folds",
+        mode, config["hpo"]["n_iter"], config["hpo"]["cv_folds"],
+    )
+    return config
+
+
+def run_baseline_profile() -> None:
+    """Hand off to the short fixed-hyperparameter path."""
+    from src.models.baseline import train_baseline
+
+    config = load_config(str(project_root / "config" / "config.yaml"))
+    summary = train_baseline(config, project_root, progress=logger.info)
+    logger.info("Baseline complete in %.0fs. Best model: %s",
+                summary["elapsed_seconds"], summary["best_model_name"])
+    for r in summary["test_results"]:
+        logger.info("  %-24s F1 %.4f  PR-AUC %.4f  ROC-AUC %.4f",
+                    r["model"], r["f1"], r["pr_auc"], r["roc_auc"])
+
+
+def main(argv=None):
     """Execute the complete training pipeline."""
+    args = parse_args(argv)
+
     logger.info("=" * 70)
-    logger.info(" XAI PREDICTIVE MAINTENANCE — TRAINING PIPELINE")
+    logger.info(" PREDICTIVE MAINTENANCE - TRAINING PIPELINE (%s)", args.mode.upper())
     logger.info("=" * 70)
+
+    # The baseline profile is a much shorter pipeline of its own; hand over to
+    # it rather than threading conditionals through every step below.
+    if args.mode == "baseline":
+        run_baseline_profile()
+        return
 
     # ========================================================================
     # 1. LOAD CONFIGURATION
     # ========================================================================
     logger.info("\n[STEP 1] Loading configuration...")
     config = load_config(str(project_root / "config" / "config.yaml"))
+    config = apply_mode(config, args.mode)
     seed = config["project"]["random_seed"]
     np.random.seed(seed)
 
@@ -99,17 +187,20 @@ def main():
     # ========================================================================
     # 4. EDA PLOTS
     # ========================================================================
-    logger.info("\n[STEP 4] Generating EDA plots...")
     figures_dir = project_root / config["artifacts"]["figures_dir"]
     figures_dir.mkdir(parents=True, exist_ok=True)
-
     target_col = config["data"]["target_column"]
-    plot_class_distribution(df_raw[target_col], "AI4I 2020 Class Distribution", figures_dir)
 
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    plt.close("all")
+
+    if args.skip_plots:
+        logger.info("\n[STEP 4] Skipping EDA plots (--skip-plots).")
+    else:
+        logger.info("\n[STEP 4] Generating EDA plots...")
+        plot_class_distribution(df_raw[target_col], "AI4I 2020 Class Distribution", figures_dir)
+        plt.close("all")
 
     # ========================================================================
     # 5. PREPROCESSING PIPELINE
@@ -137,10 +228,11 @@ def main():
     # Generate feature distribution plot using unscaled data
     df_for_eda = processed["X_train_unscaled"].copy()
     df_for_eda["machine_failure"] = processed["y_train_original"].values[:len(df_for_eda)] if len(processed["y_train_original"]) >= len(df_for_eda) else y_train.values[:len(df_for_eda)]
-    plot_feature_distributions(df_for_eda, "machine_failure", figures_dir)
-    plt.close("all")
-    plot_correlation_heatmap(df_for_eda, figures_dir)
-    plt.close("all")
+    if not args.skip_plots:
+        plot_feature_distributions(df_for_eda, "machine_failure", figures_dir)
+        plt.close("all")
+        plot_correlation_heatmap(df_for_eda, figures_dir)
+        plt.close("all")
 
     # ========================================================================
     # 6. MODEL TRAINING
@@ -224,17 +316,17 @@ def main():
     # ========================================================================
     # 10. GENERATE EVALUATION PLOTS
     # ========================================================================
-    logger.info("\n[STEP 10] Generating evaluation plots...")
-
-    # Include both calibrated and uncalibrated best model in comparisons
-    plot_models = dict(all_models)
-    plot_models[f"{best_name} (Calibrated)"] = calibrated_model
-
-    generate_all_plots(
-        plot_models, X_test, y_test, test_results,
-        config, project_root
-    )
-    plt.close("all")
+    if args.skip_plots:
+        logger.info("\n[STEP 10] Skipping evaluation plots (--skip-plots).")
+    else:
+        logger.info("\n[STEP 10] Generating evaluation plots...")
+        # Include both the calibrated and uncalibrated best model.
+        plot_models = dict(all_models)
+        plot_models[f"{best_name} (Calibrated)"] = calibrated_model
+        generate_all_plots(
+            plot_models, X_test, y_test, test_results, config, project_root
+        )
+        plt.close("all")
 
     # ========================================================================
     # 11. SHAP ANALYSIS
@@ -249,6 +341,11 @@ def main():
             break
 
     try:
+        if args.skip_shap:
+            raise RuntimeError("skipped by --skip-shap")
+
+        from src.explainability.shap_engine import SHAPEngine
+
         shap_engine = SHAPEngine(
             model=best_model,  # Use uncalibrated for SHAP (tree structure)
             X_background=X_train,
@@ -352,6 +449,7 @@ def main():
     logger.info("\n[STEP 13] Saving model artifacts...")
 
     artifacts = {
+        "training_profile": args.mode,
         "best_model": best_model,
         "best_model_calibrated": calibrated_model,
         "best_model_name": best_name,

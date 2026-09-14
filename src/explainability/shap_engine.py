@@ -17,6 +17,8 @@ Uses TreeExplainer for tree-based models (exact, fast)
 and LinearExplainer for logistic regression.
 """
 
+from __future__ import annotations
+
 import logging
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
@@ -26,7 +28,17 @@ import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import shap
+
+# SHAP is an optional heavy dependency. Import it lazily so the rest of the
+# platform -- training, scoring, the dashboard -- still runs without it; only
+# the explainability features degrade.
+try:
+    import shap
+
+    SHAP_AVAILABLE = True
+except ImportError:  # pragma: no cover - depends on the install profile
+    shap = None
+    SHAP_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
