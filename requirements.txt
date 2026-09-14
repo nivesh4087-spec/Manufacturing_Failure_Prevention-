@@ -19,6 +19,11 @@ shap>=0.43.0
 matplotlib>=3.8.0
 seaborn>=0.13.0
 plotly>=5.18.0
+statsmodels>=0.14.0        # required by plotly express trendline="lowess"
+
+# Computer Vision (Automated Optical Inspection page)
+opencv-python-headless>=4.8.0
+Pillow>=10.0.0
 
 # Dashboard
 streamlit>=1.28.0
@@ -26,13 +31,19 @@ streamlit>=1.28.0
 # Configuration
 pyyaml>=6.0.0
 
+# External database connectors (sidebar telemetry sync)
+SQLAlchemy>=2.0.0
+
 # Model Serialization
 joblib>=1.3.0
 
 # Testing
 pytest>=7.4.0
 
-# Utilities
+# Report generation (scripts/generate_false_ceiling_report.py)
 python-docx>=0.8.11
+reportlab>=4.0.0
+
+# Utilities
 ucimlrepo>=0.0.3
 openpyxl>=3.1.0

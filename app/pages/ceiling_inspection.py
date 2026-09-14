@@ -121,7 +121,15 @@ def render_page(project_root: Path, load_artifacts_fn, load_raw_dataset_fn):
             st.image(frame_img, caption="Conveyor Inspection Camera — Bounding Box Overlay", use_container_width=True)
 
             if simulated_defect != "Normal (Pass)":
-                st.error(f"⚠️ **INSPECTION ALERT**: {simulated_defect} detected on conveyor line! Quality Score: **{(1.0 - confidence_input) * 100:.1f}/100**.")
+                st.error(
+                    f"**INSPECTION ALERT** — {simulated_defect} detected on the conveyor line. "
+                    f"Quality score {(1.0 - confidence_input) * 100:.1f}/100. Tile diverted to rework station."
+                )
+            else:
+                st.success(
+                    f"**INSPECTION PASS** — tile meets geometric and surface tolerance specification. "
+                    f"Quality score {confidence_input * 100:.1f}/100."
+                )
 
     with tab2:
         st.markdown("#### How Software Receives Data in Production Environments")
@@ -166,6 +174,3 @@ def render_page(project_root: Path, load_artifacts_fn, load_raw_dataset_fn):
         st.plotly_chart(fig, use_container_width=True)
 
         st.info("💡 **Key Finding**: When stamping tool wear exceeds **180 minutes**, false ceiling tile edge chipping increases exponentially (>8% defect rate). Replacing stamping blades proactively at 170 minutes eliminates 94% of tile edge defects.")
-
-            else:
-                st.success("✅ **INSPECTION PASS**: Ceiling tile meets geometric and surface tolerance specifications (Pass Score: 98.4/100).")
